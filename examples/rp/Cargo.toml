@@ -100,7 +100,7 @@ embedded-sdmmc = "0.7.0"
 bt-hci = { version = "0.1.0", default-features = false, features = ["defmt"] }
 trouble-host = { version = "0.1.0", features = ["defmt", "gatt"] }
 libm = "0.2.8"
-evaluatorrs = { git = "https://github.com/protronic/evaluatorrs.git", version = "0.0.1", default-features = false, features = [
+evaluatorrs = { git = "https://github.com/protronic/evaluatorrs.git", rev = '82f3e03a5f70a102628d66eb710bdbd98371af98', version = "0.0.1", default-features = false, features = [
     "libm",
 ] }
 

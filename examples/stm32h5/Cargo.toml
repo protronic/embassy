@@ -32,6 +32,8 @@ micromath = "2.0.0"
 stm32-fmc = "0.3.0"
 embedded-storage = "0.3.1"
 static_cell = "2"
+evaluatorrs = { version = "0.0.1", default-features = false, features = ["libm"] }
+embedded-alloc = "0.5.1"
 
 # cargo build/run
 [profile.dev]

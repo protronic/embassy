@@ -1,46 +1,80 @@
-//! This example shows how to use USB (Universal Serial Bus) in the RP2040 chip as well as how to create multiple usb classes for one device
-//!
-//! This creates a USB serial port that echos. It will also print out logging information on a separate serial device
-
 #![no_std]
 #![no_main]
 
 use core::str;
 
-use defmt::{info, panic};
+use defmt::{panic, *};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
-use embassy_rp::bind_interrupts;
-use embassy_rp::peripherals::USB;
-use embassy_rp::usb::{Driver, Instance, InterruptHandler};
+use embassy_stm32::time::Hertz;
+use embassy_stm32::usb::{Driver, Instance};
+use embassy_stm32::{bind_interrupts, peripherals, usb, Config};
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
-use embassy_usb::{Builder, Config};
-use {defmt_rtt as _, panic_probe as _};
+use embassy_usb::Builder;
 
 use evaluatorrs::eval;
 use evaluatorrs::formulas::ParserError;
 
+extern crate alloc;
+use embedded_alloc::Heap;
+
+use {defmt_rtt as _, panic_probe as _};
+
 bind_interrupts!(struct Irqs {
-    USBCTRL_IRQ => InterruptHandler<USB>;
+    USB_DRD_FS => usb::InterruptHandler<peripherals::USB>;
 });
+
+#[global_allocator]
+static HEAP: Heap = Heap::empty();
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    info!("Hello there!");
+    let mut config = Config::default();
+    {
+        use embassy_stm32::rcc::*;
+        config.rcc.hsi = None;
+        config.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
+        config.rcc.hse = Some(Hse {
+            freq: Hertz(8_000_000),
+            mode: HseMode::BypassDigital,
+        });
+        config.rcc.pll1 = Some(Pll {
+            source: PllSource::HSE,
+            prediv: PllPreDiv::DIV2,
+            mul: PllMul::MUL125,
+            divp: Some(PllDiv::DIV2), // 250mhz
+            divq: None,
+            divr: None,
+        });
+        config.rcc.ahb_pre = AHBPrescaler::DIV2;
+        config.rcc.apb1_pre = APBPrescaler::DIV4;
+        config.rcc.apb2_pre = APBPrescaler::DIV2;
+        config.rcc.apb3_pre = APBPrescaler::DIV4;
+        config.rcc.sys = Sysclk::PLL1_P;
+        config.rcc.voltage_scale = VoltageScale::Scale0;
+        config.rcc.mux.usbsel = mux::Usbsel::HSI48;
+    }
+    let p = embassy_stm32::init(config);
 
-    let p = embassy_rp::init(Default::default());
+     // Initialize the allocator BEFORE you use it
+     {
+        use core::mem::MaybeUninit;
+        const HEAP_SIZE: usize = 1024;
+        static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
+        unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
+    }
+
+    info!("Hello World!");
 
     // Create the driver, from the HAL.
-    let driver = Driver::new(p.USB, Irqs);
+    let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
 
     // Create embassy-usb Config
-    let mut config = Config::new(0xc0de, 0xcafe);
+    let mut config = embassy_usb::Config::new(0xc0de, 0xcafe);
     config.manufacturer = Some("Embassy");
     config.product = Some("USB-serial example");
     config.serial_number = Some("12345678");
-    config.max_power = 100;
-    config.max_packet_size_0 = 64;
 
     // Required for windows compatibility.
     // https://developer.nordicsemi.com/nRF_Connect_SDK/doc/1.9.1/kconfig/CONFIG_CDC_ACM_IAD.html#help
@@ -56,7 +90,6 @@ async fn main(_spawner: Spawner) {
     let mut control_buf = [0; 64];
 
     let mut state = State::new();
-    let mut logger_state = State::new();
 
     let mut builder = Builder::new(
         driver,
@@ -70,13 +103,6 @@ async fn main(_spawner: Spawner) {
     // Create classes on the builder.
     let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
 
-    // Create a class for the logger
-    let logger_class = CdcAcmClass::new(&mut builder, &mut logger_state, 64);
-
-    // Creates the logger and returns the logger future
-    // Note: You'll need to use log::info! afterwards instead of info! for this to work (this also applies to all the other log::* macros)
-    let log_fut = embassy_usb_logger::with_class!(1024, log::LevelFilter::Info, logger_class);
-
     // Build the builder.
     let mut usb = builder.build();
 
@@ -87,15 +113,15 @@ async fn main(_spawner: Spawner) {
     let echo_fut = async {
         loop {
             class.wait_connection().await;
-            log::info!("Connected");
+            info!("Connected");
             let _ = echo(&mut class).await;
-            log::info!("Disconnected");
+            info!("Disconnected");
         }
     };
 
     // Run everything concurrently.
     // If we had made everything `'static` above instead, we could do this using separate tasks instead.
-    join(usb_fut, join(echo_fut, log_fut)).await;
+    join(usb_fut, echo_fut).await;
 }
 
 struct Disconnected {}
@@ -127,7 +153,7 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
                         if let Ok(line) = str::from_utf8(&buffer[..pos]) {
                             // Process the received line
                             // Handle the line (e.g., print it, process it, etc.)
-                            log::info!("Received line: {}", line);
+                            info!("Received line: {}", line);
                             process_line(line);
                         }
                         pos = 0; // Reset the buffer position
@@ -143,8 +169,8 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
     }
 }
 
-fn process_line(line: &str) {
+fn process_line(line: &str) -> Result<f64, ParserError> {
     let result = eval(line)?;
-    log::info!("Received line: {}", result);
-    result
+    info!("Received line: {}", result);
+    Ok(result)
 }
