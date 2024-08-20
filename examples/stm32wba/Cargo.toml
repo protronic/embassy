@@ -21,7 +21,7 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 heapless = { version = "0.8", default-features = false }
 static_cell = "2"
 
-embedded-alloc = { version = "0.5.1"} #, features = ["allocator_api"] 
+embedded-alloc = { version = "0.5.1" } 
 rhai = { git = "https://github.com/rhaiscript/rhai.git", version = "1", default-features = false, features = [
     "no_std",
     "no_optimize",
@@ -34,9 +34,9 @@ rhai = { git = "https://github.com/rhaiscript/rhai.git", version = "1", default-
     "no_closure",
     "no_position",
     "no_object",
-    "no_function"
+    "no_function",
+    "no_time"
 ] }
-#wee_alloc = { version = "0.4.5", default-features = false, features = ["static_array_backend"]}
 once_cell = { version = "1", default-features = false, features = ["race", "alloc"] }
 
 

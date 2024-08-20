@@ -15,7 +15,7 @@ use embassy_stm32::{
 };
 use {defmt_rtt as _, panic_probe as _};
 
-use rhai::{packages::Package, Engine, INT};
+use rhai::{packages::Package, Dynamic, Engine};
 
 bind_interrupts!(struct Irqs {
     USART1 => usart::InterruptHandler<peripherals::USART1>;
@@ -31,7 +31,7 @@ async fn main(_spawner: Spawner) {
     // Initialize the allocator BEFORE you use it
     {
         use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 16384;
+        const HEAP_SIZE: usize = 64 * 1024;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
     }
@@ -68,13 +68,13 @@ async fn main(_spawner: Spawner) {
             if let Ok(line) = str::from_utf8(&buffer[..pos]) {
                 // Process the received line
                 info!("Received line: {}", line);
-                match engine.eval_expression::<INT>(line) {
+                match engine.eval_expression::<Dynamic>(line) {
                     Ok(res) => {
-                        usart.blocking_write(format!("{:?},\r\n{:?}\n\r", line, res).as_bytes());
+                        unwrap!(usart.blocking_write(format!("{:?},\r\n{:?}\n\r", line, res).as_bytes()));
                     }
                     Err(e) => {
                         let mes = format!("Failed to process line: {:?}\n\rError: {:?}\n\r", line, e);
-                        usart.blocking_write(mes.as_bytes());
+                        unwrap!(usart.blocking_write(mes.as_bytes()));
                     }
                 }
             } else {
