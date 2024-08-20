@@ -1,21 +1,32 @@
 #![no_std]
 #![no_main]
 
-use embassy_executor::Spawner;
+use cortex_m_rt::entry;
+use defmt::*;
 use embassy_stm32::usart::{Config, Uart};
+use embassy_stm32::{bind_interrupts, peripherals, usart};
 use {defmt_rtt as _, panic_probe as _};
 
-#[embassy_executor::main]
-async fn main(_spawner: Spawner) {
+bind_interrupts!(struct Irqs {
+    USART1 => usart::InterruptHandler<peripherals::USART1>;
+});
+
+#[entry]
+fn main() -> ! {
+    info!("Hello World!");
+
     let p = embassy_stm32::init(Default::default());
 
-    defmt::info!("Starting system");
+    let config = Config::default();
+    // RX/TX connected to USB/UART VCP of ST-Link
+    let mut usart = Uart::new_blocking(p.USART1, p.PA8, p.PB12, config).unwrap();
 
-    let mut config1 = Config::default();
-    config1.baudrate = 115600;
+    unwrap!(usart.blocking_write(b"Hello Embassy World!\r\n"));
+    info!("wrote Hello, starting echo");
 
-    //RX/TX connected to USB/UART VCP of ST-Link
-    let mut usart1 = Uart::new_blocking(p.USART1, p.PA8, p.PB12, config1).unwrap();
-
-    let _ = usart1.blocking_write(b"Hello Embassy World!\r\n");
+    let mut buf = [0u8; 1];
+    loop {
+        unwrap!(usart.blocking_read(&mut buf));
+        unwrap!(usart.blocking_write(&buf));
+    }
 }
