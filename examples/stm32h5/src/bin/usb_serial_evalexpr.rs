@@ -3,6 +3,7 @@
 
 use core::str;
 
+use alloc::format;
 use defmt::{panic, *};
 use embassy_executor::Spawner;
 use embassy_futures::join::join;
@@ -34,33 +35,33 @@ async fn main(_spawner: Spawner) {
     {
         use embassy_stm32::rcc::*;
         config.rcc.hsi = None;
-        config.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
+        config.rcc.hsi48 = Some(Default::default()); // needed for RNG
         config.rcc.hse = Some(Hse {
-            freq: Hertz(8_000_000),
+            freq: Hertz(25_000_000),
             mode: HseMode::BypassDigital,
         });
         config.rcc.pll1 = Some(Pll {
             source: PllSource::HSE,
-            prediv: PllPreDiv::DIV2,
-            mul: PllMul::MUL125,
-            divp: Some(PllDiv::DIV2), // 250mhz
-            divq: None,
+            prediv: PllPreDiv::DIV5,
+            mul: PllMul::MUL100,
+            divp: Some(PllDiv::DIV2),
+            divq: Some(PllDiv::DIV2),
             divr: None,
         });
-        config.rcc.ahb_pre = AHBPrescaler::DIV2;
-        config.rcc.apb1_pre = APBPrescaler::DIV4;
-        config.rcc.apb2_pre = APBPrescaler::DIV2;
-        config.rcc.apb3_pre = APBPrescaler::DIV4;
+        config.rcc.ahb_pre = AHBPrescaler::DIV1;
+        config.rcc.apb1_pre = APBPrescaler::DIV1;
+        config.rcc.apb2_pre = APBPrescaler::DIV1;
+        config.rcc.apb3_pre = APBPrescaler::DIV1;
         config.rcc.sys = Sysclk::PLL1_P;
         config.rcc.voltage_scale = VoltageScale::Scale0;
         config.rcc.mux.usbsel = mux::Usbsel::HSI48;
     }
     let p = embassy_stm32::init(config);
 
-     // Initialize the allocator BEFORE you use it
-     {
+    // Initialize the allocator BEFORE you use it
+    {
         use core::mem::MaybeUninit;
-        const HEAP_SIZE: usize = 1024;
+        const HEAP_SIZE: usize = 4096;
         static mut HEAP_MEM: [MaybeUninit<u8>; HEAP_SIZE] = [MaybeUninit::uninit(); HEAP_SIZE];
         unsafe { HEAP.init(HEAP_MEM.as_ptr() as usize, HEAP_SIZE) }
     }
@@ -146,15 +147,28 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
             Ok(size) => {
                 for &byte in &buffer[pos..pos + size] {
                     // Echo each character
-                    class.write_packet(&[byte]).await.unwrap();
+                    if let Err(e) = class.write_packet(&[byte]).await {
+                        error!("Failed to write packet: {:?}", e);
+                        continue;
+                    }
+
                     // Check for newline characters
                     if byte == b'\n' || byte == b'\r' {
                         // Convert buffer to &str
                         if let Ok(line) = str::from_utf8(&buffer[..pos]) {
                             // Process the received line
-                            // Handle the line (e.g., print it, process it, etc.)
                             info!("Received line: {}", line);
-                            process_line(line);
+                            match process_line(line) {
+                                Ok(res) => {
+                                    write_in_chunks(class, format!("{:?},\n{:?}\n\r", line, res).as_bytes()).await?
+                                }
+                                Err(e) => {
+                                    let mes = format!("Failed to process line: {:?}\n\rError: {:?}\n\r", line, e);
+                                    write_in_chunks(class, mes.as_bytes()).await?
+                                }
+                            }
+                        } else {
+                            error!("Failed to convert buffer to string");
                         }
                         pos = 0; // Reset the buffer position
                     } else {
@@ -163,14 +177,25 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
                 }
             }
             Err(e) => {
-                // Handle the error
+                error!("Error reading packet: {:?}", e);
             }
         }
     }
 }
 
+async fn write_in_chunks<'d, T: Instance + 'd>(
+    class: &mut CdcAcmClass<'d, Driver<'d, T>>,
+    data: &[u8],
+) -> Result<(), Disconnected> {
+    let chunk_size = 64;
+    for chunk in data.chunks(chunk_size) {
+        class.write_packet(chunk).await?;
+    }
+    Ok(())
+}
+
 fn process_line(line: &str) -> Result<f64, ParserError> {
     let result = eval(line)?;
-    info!("Received line: {}", result);
+    info!("Eval expression result: {}", result);
     Ok(result)
 }
