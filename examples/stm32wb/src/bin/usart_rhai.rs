@@ -10,12 +10,14 @@ use core::str;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::{
-    bind_interrupts, peripherals,
+    bind_interrupts,
+    gpio::{Level, Output, Speed},
+    peripherals,
     usart::{self, Config, Uart},
 };
 use {defmt_rtt as _, panic_probe as _};
 
-use rhai::{packages::Package, packages::BasicMathPackage, Dynamic, Engine};
+use rhai::{packages::BasicMathPackage, packages::Package, Dynamic, Engine};
 
 bind_interrupts!(struct Irqs {
     USART1 => usart::InterruptHandler<peripherals::USART1>;
@@ -23,6 +25,8 @@ bind_interrupts!(struct Irqs {
 
 #[global_allocator]
 static HEAP: Heap = Heap::empty();
+
+static mut LED: Option<Output> = None;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -37,6 +41,10 @@ async fn main(_spawner: Spawner) {
     }
 
     info!("Starting system");
+
+    unsafe {
+        LED = Some(Output::new(p.PB2, Level::High, Speed::Low));
+    }
 
     let mut config = Config::default();
     config.baudrate = 115600;
@@ -53,6 +61,8 @@ async fn main(_spawner: Spawner) {
     // this bit gets commented out to test size without Core
     let std = rhai::packages::CorePackage::new();
     std.register_into_engine(&mut engine);
+
+    engine.register_fn("led", control_led);
 
     let _ = usart.blocking_write(b"Hello Embassy World!\r\n");
 
@@ -87,6 +97,20 @@ async fn main(_spawner: Spawner) {
             pos = 0; // Reset the buffer position
         } else {
             pos += 1;
+        }
+    }
+
+    fn control_led(state: bool) {
+        unsafe {
+            if let Some(ref mut led) = LED {
+                if state {
+                    info!("high");
+                    led.set_high();
+                } else {
+                    info!("low");
+                    led.set_low();
+                }
+            }
         }
     }
 }
