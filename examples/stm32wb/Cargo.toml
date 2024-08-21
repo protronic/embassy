@@ -23,6 +23,24 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 heapless = { version = "0.8", default-features = false }
 static_cell = "2"
 
+embedded-alloc = { version = "0.5.1" } 
+rhai = { git = "https://github.com/rhaiscript/rhai.git", version = "1", default-features = false, features = [
+    "no_std",
+    "no_optimize",
+    # "no_float",
+    "no_custom_syntax",
+    "unchecked",
+    "only_i32",
+    "f32_float",
+    "no_index",
+    "no_module",
+    "no_closure",
+    "no_position",
+    "no_object",
+    "no_function"
+] }
+once_cell = { version = "1", default-features = false, features = ["race", "alloc"] }
+
 [features]
 default = ["ble", "mac"]
 mac = ["embassy-stm32-wpan/mac", "dep:embassy-net"]
