@@ -166,6 +166,7 @@ cargo batch \
     --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv8m.main-none-eabihf --features stm32h562ag,defmt,exti,time-driver-any,time \
     --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv8m.main-none-eabihf --features stm32wba50ke,defmt,exti,time-driver-any,time \
     --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv8m.main-none-eabihf --features stm32wba55ug,defmt,exti,time-driver-any,time \
+    --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv8m.main-none-eabihf --features stm32u5f9zj,defmt,exti,time-driver-any,time \
     --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv8m.main-none-eabihf --features stm32u5g9nj,defmt,exti,time-driver-any,time \
     --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv7em-none-eabi --features stm32wb35ce,defmt,exti,time-driver-any,time \
     --- build --release --manifest-path embassy-stm32/Cargo.toml --target thumbv6m-none-eabi --features stm32u031r8,defmt,exti,time-driver-any,time \
@@ -304,11 +305,6 @@ rm out/tests/stm32f207zg/eth
 
 # doesn't work, gives "noise error", no idea why. usart_dma does pass.
 rm out/tests/stm32u5a5zj/usart
-
-# flaky, probably due to bad ringbuffered dma code.
-rm out/tests/stm32l152re/usart_rx_ringbuffered
-rm out/tests/stm32f207zg/usart_rx_ringbuffered
-rm out/tests/stm32wl55jc/usart_rx_ringbuffered
 
 if [[ -z "${TELEPROBE_TOKEN-}" ]]; then
     echo No teleprobe token found, skipping running HIL tests
