@@ -157,6 +157,7 @@ pub struct BufferedUartTx<'d> {
     tx: Option<PeripheralRef<'d, AnyPin>>,
     cts: Option<PeripheralRef<'d, AnyPin>>,
     de: Option<PeripheralRef<'d, AnyPin>>,
+    is_borrowed: bool,
 }
 
 /// Rx-only buffered UART
@@ -168,6 +169,7 @@ pub struct BufferedUartRx<'d> {
     kernel_clock: Hertz,
     rx: Option<PeripheralRef<'d, AnyPin>>,
     rts: Option<PeripheralRef<'d, AnyPin>>,
+    is_borrowed: bool,
 }
 
 impl<'d> SetConfig for BufferedUart<'d> {
@@ -246,6 +248,54 @@ impl<'d> BufferedUart<'d> {
         )
     }
 
+    /// Create a new bidirectional buffered UART driver with only the RTS pin as the DE pin
+    pub fn new_with_rts_as_de<T: Instance>(
+        peri: impl Peripheral<P = T> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        rx: impl Peripheral<P = impl RxPin<T>> + 'd,
+        tx: impl Peripheral<P = impl TxPin<T>> + 'd,
+        rts: impl Peripheral<P = impl RtsPin<T>> + 'd,
+        tx_buffer: &'d mut [u8],
+        rx_buffer: &'d mut [u8],
+        config: Config,
+    ) -> Result<Self, ConfigError> {
+        Self::new_inner(
+            peri,
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::Medium)),
+            None,
+            None,
+            new_pin!(rts, AfType::input(Pull::None)), // RTS mapped used as DE
+            tx_buffer,
+            rx_buffer,
+            config,
+        )
+    }
+
+    /// Create a new bidirectional buffered UART driver with only the request-to-send pin
+    pub fn new_with_rts<T: Instance>(
+        peri: impl Peripheral<P = T> + 'd,
+        _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
+        rx: impl Peripheral<P = impl RxPin<T>> + 'd,
+        tx: impl Peripheral<P = impl TxPin<T>> + 'd,
+        rts: impl Peripheral<P = impl RtsPin<T>> + 'd,
+        tx_buffer: &'d mut [u8],
+        rx_buffer: &'d mut [u8],
+        config: Config,
+    ) -> Result<Self, ConfigError> {
+        Self::new_inner(
+            peri,
+            new_pin!(rx, AfType::input(Pull::None)),
+            new_pin!(tx, AfType::output(OutputType::PushPull, Speed::Medium)),
+            new_pin!(rts, AfType::input(Pull::None)),
+            None, // no CTS
+            None, // no DE
+            tx_buffer,
+            rx_buffer,
+            config,
+        )
+    }
+
     /// Create a new bidirectional buffered UART driver with a driver-enable pin
     #[cfg(not(any(usart_v1, usart_v2)))]
     pub fn new_with_de<T: Instance>(
@@ -293,6 +343,7 @@ impl<'d> BufferedUart<'d> {
                 kernel_clock,
                 rx,
                 rts,
+                is_borrowed: false,
             },
             tx: BufferedUartTx {
                 info,
@@ -301,6 +352,7 @@ impl<'d> BufferedUart<'d> {
                 tx,
                 cts,
                 de,
+                is_borrowed: false,
             },
         };
         this.enable_and_configure(tx_buffer, rx_buffer, &config)?;
@@ -346,6 +398,31 @@ impl<'d> BufferedUart<'d> {
     /// Split the driver into a Tx and Rx part (useful for sending to separate tasks)
     pub fn split(self) -> (BufferedUartTx<'d>, BufferedUartRx<'d>) {
         (self.tx, self.rx)
+    }
+
+    /// Split the Uart into a transmitter and receiver,
+    /// which is particularly useful when having two tasks correlating to
+    /// transmitting and receiving.
+    pub fn split_ref(&mut self) -> (BufferedUartTx<'_>, BufferedUartRx<'_>) {
+        (
+            BufferedUartTx {
+                info: self.tx.info,
+                state: self.tx.state,
+                kernel_clock: self.tx.kernel_clock,
+                tx: self.tx.tx.as_mut().map(PeripheralRef::reborrow),
+                cts: self.tx.cts.as_mut().map(PeripheralRef::reborrow),
+                de: self.tx.de.as_mut().map(PeripheralRef::reborrow),
+                is_borrowed: true,
+            },
+            BufferedUartRx {
+                info: self.rx.info,
+                state: self.rx.state,
+                kernel_clock: self.rx.kernel_clock,
+                rx: self.rx.rx.as_mut().map(PeripheralRef::reborrow),
+                rts: self.rx.rts.as_mut().map(PeripheralRef::reborrow),
+                is_borrowed: true,
+            },
+        )
     }
 
     /// Reconfigure the driver
@@ -552,40 +629,44 @@ impl<'d> BufferedUartTx<'d> {
 
 impl<'d> Drop for BufferedUartRx<'d> {
     fn drop(&mut self) {
-        let state = self.state;
-        unsafe {
-            state.rx_buf.deinit();
+        if !self.is_borrowed {
+            let state = self.state;
+            unsafe {
+                state.rx_buf.deinit();
 
-            // TX is inactive if the the buffer is not available.
-            // We can now unregister the interrupt handler
-            if state.tx_buf.len() == 0 {
-                self.info.interrupt.disable();
+                // TX is inactive if the the buffer is not available.
+                // We can now unregister the interrupt handler
+                if state.tx_buf.len() == 0 {
+                    self.info.interrupt.disable();
+                }
             }
-        }
 
-        self.rx.as_ref().map(|x| x.set_as_disconnected());
-        self.rts.as_ref().map(|x| x.set_as_disconnected());
-        drop_tx_rx(self.info, state);
+            self.rx.as_ref().map(|x| x.set_as_disconnected());
+            self.rts.as_ref().map(|x| x.set_as_disconnected());
+            drop_tx_rx(self.info, state);
+        }
     }
 }
 
 impl<'d> Drop for BufferedUartTx<'d> {
     fn drop(&mut self) {
-        let state = self.state;
-        unsafe {
-            state.tx_buf.deinit();
+        if !self.is_borrowed {
+            let state = self.state;
+            unsafe {
+                state.tx_buf.deinit();
 
-            // RX is inactive if the the buffer is not available.
-            // We can now unregister the interrupt handler
-            if state.rx_buf.len() == 0 {
-                self.info.interrupt.disable();
+                // RX is inactive if the the buffer is not available.
+                // We can now unregister the interrupt handler
+                if state.rx_buf.len() == 0 {
+                    self.info.interrupt.disable();
+                }
             }
-        }
 
-        self.tx.as_ref().map(|x| x.set_as_disconnected());
-        self.cts.as_ref().map(|x| x.set_as_disconnected());
-        self.de.as_ref().map(|x| x.set_as_disconnected());
-        drop_tx_rx(self.info, state);
+            self.tx.as_ref().map(|x| x.set_as_disconnected());
+            self.cts.as_ref().map(|x| x.set_as_disconnected());
+            self.de.as_ref().map(|x| x.set_as_disconnected());
+            drop_tx_rx(self.info, state);
+        }
     }
 }
 
