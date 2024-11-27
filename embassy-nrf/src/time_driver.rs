@@ -10,6 +10,11 @@ use embassy_time_driver::{AlarmHandle, Driver};
 use crate::interrupt::InterruptExt;
 use crate::{interrupt, pac};
 
+#[cfg(feature = "_nrf54l")]
+fn rtc() -> pac::rtc::Rtc {
+    pac::RTC30
+}
+#[cfg(not(feature = "_nrf54l"))]
 fn rtc() -> pac::rtc::Rtc {
     pac::RTC1
 }
@@ -118,11 +123,10 @@ struct RtcDriver {
     alarms: Mutex<[AlarmState; ALARM_COUNT]>,
 }
 
-const ALARM_STATE_NEW: AlarmState = AlarmState::new();
 embassy_time_driver::time_driver_impl!(static DRIVER: RtcDriver = RtcDriver {
     period: AtomicU32::new(0),
     alarm_count: AtomicU8::new(0),
-    alarms: Mutex::const_new(CriticalSectionRawMutex::new(), [ALARM_STATE_NEW; ALARM_COUNT]),
+    alarms: Mutex::const_new(CriticalSectionRawMutex::new(), [const {AlarmState::new()}; ALARM_COUNT]),
 });
 
 impl RtcDriver {
@@ -132,7 +136,7 @@ impl RtcDriver {
 
         r.intenset().write(|w| {
             w.set_ovrflw(true);
-            w.set_compare3(true);
+            w.set_compare(3, true);
         });
 
         r.tasks_clear().write_value(1);
@@ -141,8 +145,16 @@ impl RtcDriver {
         // Wait for clear
         while r.counter().read().0 != 0 {}
 
-        interrupt::RTC1.set_priority(irq_prio);
-        unsafe { interrupt::RTC1.enable() };
+        #[cfg(feature = "_nrf54l")]
+        {
+            interrupt::RTC30.set_priority(irq_prio);
+            unsafe { interrupt::RTC30.enable() };
+        }
+        #[cfg(not(feature = "_nrf54l"))]
+        {
+            interrupt::RTC1.set_priority(irq_prio);
+            unsafe { interrupt::RTC1.enable() };
+        }
     }
 
     fn on_interrupt(&self) {
@@ -292,6 +304,14 @@ impl Driver for RtcDriver {
     }
 }
 
+#[cfg(feature = "_nrf54l")]
+#[cfg(feature = "rt")]
+#[interrupt]
+fn RTC30() {
+    DRIVER.on_interrupt()
+}
+
+#[cfg(not(feature = "_nrf54l"))]
 #[cfg(feature = "rt")]
 #[interrupt]
 fn RTC1() {
