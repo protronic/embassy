@@ -11,10 +11,10 @@ use embassy_sync::channel::Channel;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
-    USART1 => usart::InterruptHandler<peripherals::USART1>;
+    USART2 => usart::InterruptHandler<peripherals::USART2>;
 });
 
-static CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
+static CHANNEL: Channel<ThreadModeRawMutex, [u8; 64], 1> = Channel::new();
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) -> ! {
@@ -22,7 +22,7 @@ async fn main(spawner: Spawner) -> ! {
     info!("Hello World!");
 
     let config = Config::default();
-    let mut usart = Uart::new(p.USART1, p.PB15, p.PB14, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let mut usart = Uart::new(p.USART2, p.PA3, p.PA2, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
     unwrap!(usart.blocking_write(b"Type 8 chars to echo!\r\n"));
 
     let (mut tx, rx) = usart.split();
@@ -38,7 +38,7 @@ async fn main(spawner: Spawner) -> ! {
 
 #[embassy_executor::task]
 async fn reader(mut rx: UartRx<'static, Async>) {
-    let mut buf = [0; 8];
+    let mut buf = [0; 64];
     loop {
         info!("reading...");
         unwrap!(rx.read(&mut buf).await);
