@@ -6,7 +6,11 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 use embassy_stm32::time::Hertz;
 use embassy_stm32::usb::{Driver, Instance};
-use embassy_stm32::{bind_interrupts, peripherals, usb, Config};
+use embassy_stm32::{bind_interrupts, peripherals, usb, usart, Config};
+use embassy_stm32::mode::Async;
+use embassy_stm32::usart::{Uart, UartRx};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
@@ -17,7 +21,9 @@ bind_interrupts!(struct Irqs {
     USART1 => usart::InterruptHandler<peripherals::USART1>;
 });
 
-static CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
+static RX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
+static TX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
+
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
@@ -49,6 +55,12 @@ async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(config);
 
     info!("Hello World!");
+
+    let config = embassy_stm32::usart::Config::default();
+    let mut usart = Uart::new(p.USART1, p.PB15, p.PB14, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let (mut tx, rx) = usart.split();
+
+    unwrap!(_spawner.spawn(reader(rx)));
 
     // Create the driver, from the HAL.
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
@@ -98,6 +110,27 @@ async fn main(_spawner: Spawner) {
     // Run everything concurrently.
     // If we had made everything `'static` above instead, we could do this using separate tasks instead.
     join(usb_fut, echo_fut).await;
+
+    loop {
+        let tx_buf = TX_CHANNEL.receive().await;
+        info!("writing...");
+        unwrap!(tx.write(&tx_buf).await);
+        let rx_buf = RX_CHANNEL.receive().await;
+        info!("writing...");
+        unwrap!(class.write_packet(&rx_buf).await);
+    }
+
+
+}
+
+#[embassy_executor::task]
+async fn reader(mut rx: UartRx<'static, Async>) {
+    let mut buf = [0; 8];
+    loop {
+        info!("reading...");
+        unwrap!(rx.read(&mut buf).await);
+        RX_CHANNEL.send(buf).await;
+    }
 }
 
 struct Disconnected {}
@@ -117,6 +150,8 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
         let n = class.read_packet(&mut buf).await?;
         let data = &buf[..n];
         info!("data: {:x}", data);
-        class.write_packet(data).await?;
+        TX_CHANNEL.send(data);
     }
 }
+
+

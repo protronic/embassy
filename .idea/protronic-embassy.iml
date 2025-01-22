@@ -4,8 +4,10 @@
     <content url="file://$MODULE_DIR$">
       <sourceFolder url="file://$MODULE_DIR$/examples/stm32h503RB/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/examples/stm32u575ZI/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/examples/stm32f746zg/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/examples/stm32h503RB/target" />
       <excludeFolder url="file://$MODULE_DIR$/examples/stm32u575ZI/target" />
+      <excludeFolder url="file://$MODULE_DIR$/examples/stm32f746zg/target" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
