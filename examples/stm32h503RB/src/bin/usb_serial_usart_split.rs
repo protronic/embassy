@@ -18,7 +18,7 @@ use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USB_DRD_FS => usb::InterruptHandler<peripherals::USB>;
-    USART1 => usart::InterruptHandler<peripherals::USART1>;
+    USART3 => usart::InterruptHandler<peripherals::USART3>;
 });
 
 static RX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 64], 1> = Channel::new();
@@ -57,7 +57,7 @@ async fn main(_spawner: Spawner) {
     info!("Hello World!");
 
     let config = embassy_stm32::usart::Config::default();
-    let mut usart = Uart::new(p.USART1, p.PB15, p.PB14, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let mut usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
     let (mut tx, rx) = usart.split();
 
     unwrap!(_spawner.spawn(reader(rx)));
@@ -128,7 +128,8 @@ async fn reader(mut rx: UartRx<'static, Async>) {
     let mut buf = [0; 64];
     loop {
         info!("reading...");
-        unwrap!(rx.read(&mut buf).await);
+        unwrap!(rx.read_until_idle(&mut buf).await);
+        info!("data: {:x}", buf);
         RX_CHANNEL.send(buf).await;
     }
 }

@@ -13,7 +13,7 @@ use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
-    UART7 => usart::InterruptHandler<peripherals::UART7>;
+    USART3 => usart::InterruptHandler<peripherals::USART3>;
 });
 
 #[embassy_executor::task]
@@ -21,7 +21,7 @@ async fn main_task() {
     let p = embassy_stm32::init(Default::default());
 
     let config = Config::default();
-    let mut usart = Uart::new(p.UART7, p.PF6, p.PF7, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let mut usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
 
     for n in 0u32.. {
         let mut s: String<128> = String::new();
