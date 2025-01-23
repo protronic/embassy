@@ -21,8 +21,8 @@ bind_interrupts!(struct Irqs {
     USART1 => usart::InterruptHandler<peripherals::USART1>;
 });
 
-static RX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
-static TX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 8], 1> = Channel::new();
+static RX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 64], 1> = Channel::new();
+static TX_CHANNEL: Channel<ThreadModeRawMutex, [u8; 64], 1> = Channel::new();
 
 
 #[embassy_executor::main]
@@ -125,7 +125,7 @@ async fn main(_spawner: Spawner) {
 
 #[embassy_executor::task]
 async fn reader(mut rx: UartRx<'static, Async>) {
-    let mut buf = [0; 8];
+    let mut buf = [0; 64];
     loop {
         info!("reading...");
         unwrap!(rx.read(&mut buf).await);
@@ -150,7 +150,7 @@ async fn echo<'d, T: Instance + 'd>(class: &mut CdcAcmClass<'d, Driver<'d, T>>) 
         let n = class.read_packet(&mut buf).await?;
         let data = &buf[..n];
         info!("data: {:x}", data);
-        TX_CHANNEL.send(data);
+        TX_CHANNEL.send(buf);
     }
 }
 
