@@ -9,7 +9,7 @@ use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{Uart, UartRx, UartTx};
 use embassy_stm32::usb::{Driver, Instance};
 use embassy_stm32::{bind_interrupts, peripherals, usart, usb, Config};
-use embassy_sync::blocking_mutex::raw::{NoopRawMutex};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::pipe::{Pipe, Reader};
 use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
 use embassy_time::Timer;
@@ -97,7 +97,7 @@ async fn main(_spawner: Spawner) {
                 usb_read(&mut usb_rx, &mut uart_pipe_writer),
                 usb_write(&mut usb_tx, &mut usb_pipe_reader, led_signal.publisher().unwrap()),
             )
-                .await;
+            .await;
             info!("Disconnected");
         }
     };
