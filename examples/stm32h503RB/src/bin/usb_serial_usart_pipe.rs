@@ -4,13 +4,11 @@
 use defmt::{panic, *};
 use embassy_executor::Spawner;
 use embassy_futures::join::{join, join3};
-use embassy_stm32::time::Hertz;
 use embassy_stm32::usb::{Driver, Instance};
 use embassy_stm32::{bind_interrupts, peripherals, usb, usart, Config};
 use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{Uart, UartRx, UartTx};
-use embassy_sync::blocking_mutex::raw::{NoopRawMutex, ThreadModeRawMutex};
-use embassy_sync::channel::Channel;
+use embassy_sync::blocking_mutex::raw::{NoopRawMutex};
 use embassy_sync::pipe::Pipe;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, Receiver, Sender, State};
 use embassy_usb::driver::EndpointError;
@@ -27,35 +25,16 @@ async fn main(_spawner: Spawner) {
     let mut config = Config::default();
     {
         use embassy_stm32::rcc::*;
-        //config.rcc.hsi = None;
         config.rcc.hsi48 = Some(Hsi48Config { sync_from_usb: true }); // needed for USB
-        // config.rcc.hse = Some(Hse {
-        //     freq: Hertz(24_000_000),
-        //     mode: HseMode::BypassDigital,
-        // });
-        // config.rcc.pll1 = Some(Pll {
-        //     source: PllSource::HSE,
-        //     prediv: PllPreDiv::DIV3,
-        //     mul: PllMul::MUL62,
-        //     divp: Some(PllDiv::DIV2), // 250mhz
-        //     divq: Some(PllDiv::DIV2),
-        //     divr: Some(PllDiv::DIV2),
-        // });
-        // config.rcc.ahb_pre = AHBPrescaler::DIV1;
-        // config.rcc.apb1_pre = APBPrescaler::DIV1;
-        // config.rcc.apb2_pre = APBPrescaler::DIV1;
-        // config.rcc.apb3_pre = APBPrescaler::DIV1;
-        // config.rcc.sys = Sysclk::PLL1_P;
-        // config.rcc.voltage_scale = VoltageScale::Scale0;
         config.rcc.mux.usbsel = mux::Usbsel::HSI48;
     }
     let p = embassy_stm32::init(config);
 
     info!("Hello World!");
 
-    let config = embassy_stm32::usart::Config::default();
-    let mut usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
-    let (mut uart_tx, uart_rx) = usart.split();
+    let config = usart::Config::default();
+    let usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let (uart_tx, uart_rx) = usart.split();
 
     // Create the driver, from the HAL.
     let driver = Driver::new(p.USB, Irqs, p.PA12, p.PA11);
@@ -84,7 +63,7 @@ async fn main(_spawner: Spawner) {
     );
 
     // Create classes on the builder.
-    let mut class = CdcAcmClass::new(&mut builder, &mut state, 64);
+    let class = CdcAcmClass::new(&mut builder, &mut state, 64);
 
     // Build the builder.
     let mut usb = builder.build();
