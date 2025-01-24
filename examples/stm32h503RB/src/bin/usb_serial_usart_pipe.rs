@@ -3,13 +3,16 @@
 
 use defmt::{panic, *};
 use embassy_executor::Spawner;
-use embassy_futures::join::{join, join3};
-use embassy_stm32::usb::{Driver, Instance};
-use embassy_stm32::{bind_interrupts, peripherals, usb, usart, Config};
+use embassy_futures::join::{join, join4};
+use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::mode::Async;
 use embassy_stm32::usart::{Uart, UartRx, UartTx};
+use embassy_stm32::usb::{Driver, Instance};
+use embassy_stm32::{bind_interrupts, peripherals, usart, usb, Config};
 use embassy_sync::blocking_mutex::raw::{NoopRawMutex};
-use embassy_sync::pipe::Pipe;
+use embassy_sync::pipe::{Pipe, Reader};
+use embassy_sync::pubsub::{PubSubChannel, Publisher, Subscriber};
+use embassy_time::Timer;
 use embassy_usb::class::cdc_acm::{CdcAcmClass, Receiver, Sender, State};
 use embassy_usb::driver::EndpointError;
 use embassy_usb::Builder;
@@ -31,6 +34,10 @@ async fn main(_spawner: Spawner) {
     let p = embassy_stm32::init(config);
 
     info!("Hello World!");
+    // Create a subscriber for the blink task
+    // Define a PubSubChannel for led
+    let led_signal: PubSubChannel<NoopRawMutex, u8, 1, 1, 2> = PubSubChannel::new();
+    let blink_future = async { blinky(p.PB0, led_signal.subscriber().unwrap()).await };
 
     let config = usart::Config::default();
     let usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
@@ -88,7 +95,7 @@ async fn main(_spawner: Spawner) {
             info!("Connected");
             let _ = join(
                 usb_read(&mut usb_rx, &mut uart_pipe_writer),
-                usb_write(&mut usb_tx, &mut usb_pipe_reader),
+                usb_write(&mut usb_tx, &mut usb_pipe_reader, led_signal.publisher().unwrap()),
             )
                 .await;
             info!("Disconnected");
@@ -98,14 +105,13 @@ async fn main(_spawner: Spawner) {
     // Read + write from UART
     let uart_future = join(
         uart_read(uart_rx, &mut usb_pipe_writer),
-        uart_write(uart_tx, &mut uart_pipe_reader),
+        uart_write(uart_tx, &mut uart_pipe_reader, led_signal.publisher().unwrap()),
     );
 
     // Run everything concurrently.
     // If we had made everything `'static` above instead, we could do this using separate tasks instead.
-    join3(usb_fut, usb_future, uart_future).await;
+    join4(usb_fut, usb_future, uart_future, blink_future).await;
 }
-
 
 struct Disconnected {}
 
@@ -135,11 +141,13 @@ async fn usb_read<'d, T: Instance + 'd>(
 /// Read from the USB TX pipe and write it to the USB
 async fn usb_write<'d, T: Instance + 'd>(
     usb_tx: &mut Sender<'d, Driver<'d, T>>,
-    usb_pipe_reader: &mut embassy_sync::pipe::Reader<'_, NoopRawMutex, 20>,
+    usb_pipe_reader: &mut Reader<'_, NoopRawMutex, 20>,
+    publisher: Publisher<'_, NoopRawMutex, u8, 1, 1, 2>,
 ) -> Result<(), Disconnected> {
     let mut buf = [0; 64];
     loop {
         let n = (*usb_pipe_reader).read(&mut buf).await;
+        publisher.publish_immediate(n as u8);
         let data = &buf[..n];
         trace!("USB OUT: {:x}", data);
         usb_tx.write_packet(&data).await?;
@@ -166,16 +174,32 @@ async fn uart_read(
 /// Read from the UART TX pipe and write it to the UART
 async fn uart_write(
     mut uart_tx: UartTx<'static, Async>,
-    uart_pipe_reader: &mut embassy_sync::pipe::Reader<'_, NoopRawMutex, 20>,
+    uart_pipe_reader: &mut Reader<'_, NoopRawMutex, 20>,
+    publisher: Publisher<'_, NoopRawMutex, u8, 1, 1, 2>,
 ) -> ! {
     let mut buf = [0; 64];
     loop {
         let n = (*uart_pipe_reader).read(&mut buf).await;
+        publisher.publish_immediate(n as u8);
         let data = &buf[..n];
         trace!("UART OUT: {:x}", data);
         let _ = uart_tx.write(&data).await;
     }
 }
 
-
-
+async fn blinky(led: peripherals::PB0, mut subscriber: Subscriber<'_, NoopRawMutex, u8, 1, 1, 2>) {
+    let mut led = Output::new(led, Level::High, Speed::Low);
+    loop {
+        if let Some(times) = subscriber.try_next_message_pure() {
+            for _ in 0..times {
+                led.toggle();
+                Timer::after_millis(50).await;
+                led.toggle();
+                Timer::after_millis(50).await;
+            }
+        } else {
+            led.toggle();
+            Timer::after_millis(500).await;
+        }
+    }
+}
