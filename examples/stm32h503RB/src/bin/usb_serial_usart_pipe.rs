@@ -20,7 +20,12 @@ use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     USB_DRD_FS => usb::InterruptHandler<peripherals::USB>;
-    USART3 => usart::InterruptHandler<peripherals::USART3>;
+    // USART1 (PB14/PB15) connected to the
+    // ARDUINO® Uno V3 (D1 and D0)
+    USART1 => usart::InterruptHandler<peripherals::USART1>;
+    // USART3 (PA3/PA4) connected to the STLINK-
+    // V3EC Virtual COM port
+    //USART3 => usart::InterruptHandler<peripherals::USART3>;
 });
 
 #[embassy_executor::main]
@@ -40,7 +45,8 @@ async fn main(_spawner: Spawner) {
     let blink_future = async { blinky(p.PB0, led_signal.subscriber().unwrap()).await };
 
     let config = usart::Config::default();
-    let usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let usart = Uart::new(p.USART1, p.PB15, p.PB14, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    //let usart = Uart::new(p.USART3, p.PA3, p.PA4, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
     let (uart_tx, uart_rx) = usart.split();
 
     // Create the driver, from the HAL.
@@ -79,10 +85,10 @@ async fn main(_spawner: Spawner) {
     let usb_fut = usb.run();
 
     // Pipe setup
-    let mut usb_pipe: Pipe<NoopRawMutex, 20> = Pipe::new();
+    let mut usb_pipe: Pipe<NoopRawMutex, 256> = Pipe::new();
     let (mut usb_pipe_reader, mut usb_pipe_writer) = usb_pipe.split();
 
-    let mut uart_pipe: Pipe<NoopRawMutex, 20> = Pipe::new();
+    let mut uart_pipe: Pipe<NoopRawMutex, 256> = Pipe::new();
     let (mut uart_pipe_reader, mut uart_pipe_writer) = uart_pipe.split();
 
     let (mut usb_tx, mut usb_rx) = class.split();
@@ -127,7 +133,7 @@ impl From<EndpointError> for Disconnected {
 /// Read from the USB and write it to the UART TX pipe
 async fn usb_read<'d, T: Instance + 'd>(
     usb_rx: &mut Receiver<'d, Driver<'d, T>>,
-    uart_pipe_writer: &mut embassy_sync::pipe::Writer<'_, NoopRawMutex, 20>,
+    uart_pipe_writer: &mut embassy_sync::pipe::Writer<'_, NoopRawMutex, 256>,
 ) -> Result<(), Disconnected> {
     let mut buf = [0; 64];
     loop {
@@ -141,7 +147,7 @@ async fn usb_read<'d, T: Instance + 'd>(
 /// Read from the USB TX pipe and write it to the USB
 async fn usb_write<'d, T: Instance + 'd>(
     usb_tx: &mut Sender<'d, Driver<'d, T>>,
-    usb_pipe_reader: &mut Reader<'_, NoopRawMutex, 20>,
+    usb_pipe_reader: &mut Reader<'_, NoopRawMutex, 256>,
     publisher: Publisher<'_, NoopRawMutex, u8, 1, 1, 2>,
 ) -> Result<(), Disconnected> {
     let mut buf = [0; 64];
@@ -157,7 +163,7 @@ async fn usb_write<'d, T: Instance + 'd>(
 /// Read from the UART and write it to the USB TX pipe
 async fn uart_read(
     mut uart_rx: UartRx<'static, Async>,
-    usb_pipe_writer: &mut embassy_sync::pipe::Writer<'_, NoopRawMutex, 20>,
+    usb_pipe_writer: &mut embassy_sync::pipe::Writer<'_, NoopRawMutex, 256>,
 ) -> ! {
     let mut buf = [0; 64];
     loop {
@@ -174,7 +180,7 @@ async fn uart_read(
 /// Read from the UART TX pipe and write it to the UART
 async fn uart_write(
     mut uart_tx: UartTx<'static, Async>,
-    uart_pipe_reader: &mut Reader<'_, NoopRawMutex, 20>,
+    uart_pipe_reader: &mut Reader<'_, NoopRawMutex, 256>,
     publisher: Publisher<'_, NoopRawMutex, u8, 1, 1, 2>,
 ) -> ! {
     let mut buf = [0; 64];
