@@ -46,11 +46,9 @@ async fn main(_spawner: Spawner) {
         LED = Some(Output::new(p.PC2, Level::High, Speed::Low));
     }
 
-    let mut config = Config::default();
-    config.baudrate = 115600;
-
-    //RX/TX connected to USB/UART VCP of ST-Link
-    let mut usart = Uart::new_blocking(p.USART1, p.PB7, p.PB6, config).unwrap();
+    let config = usart::Config::default();
+    let mut usart = Uart::new(p.USART1, p.PB7, p.PB6, Irqs, p.GPDMA1_CH0, p.GPDMA1_CH1, config).unwrap();
+    let (mut uart_tx, mut uart_rx) = usart.split();
 
     let mut engine = Engine::new_raw();
     let package = BasicMathPackage::new();
@@ -64,17 +62,16 @@ async fn main(_spawner: Spawner) {
 
     engine.register_fn("led", control_led);
 
-    let _ = usart.blocking_write(b"Hello Embassy World!\r\n");
+    uart_tx.write(b"Hello Embassy World!\r\n").await.unwrap();
 
     let mut pos = 0;
     let mut buffer = [0u8; 128];
     let mut buf = [0u8; 1];
     loop {
-        unwrap!(usart.blocking_read(&mut buf));
-        // unwrap!(usart.blocking_write(&buf));
+        uart_rx.read(&mut buf).await.unwrap();
         buffer[pos] = buf[0];
 
-        unwrap!(usart.blocking_write(&buf));
+        uart_tx.write(&buf).await.unwrap();
 
         // Check for newline characters
         if buf[0] == b'\n' || buf[0] == b'\r' {
@@ -84,11 +81,11 @@ async fn main(_spawner: Spawner) {
                 info!("Received line: {}", line);
                 match engine.eval_expression::<Dynamic>(line) {
                     Ok(res) => {
-                        unwrap!(usart.blocking_write(format!("{:?},\r\n{:?}\n\r", line, res).as_bytes()));
+                        uart_tx.write(format!("{:?},\r\n{:?}\n\r", line, res).as_bytes()).await.unwrap();
                     }
                     Err(e) => {
                         let mes = format!("Failed to process line: {:?}\n\rError: {:?}\n\r", line, e);
-                        unwrap!(usart.blocking_write(mes.as_bytes()));
+                        uart_tx.write(mes.as_bytes()).await.unwrap();
                     }
                 }
             } else {
