@@ -27,11 +27,11 @@ embedded-alloc = { version = "0.5.1" }
 rhai = { git = "https://github.com/rhaiscript/rhai.git", version = "1", default-features = false, features = [
     "no_std",
     "no_optimize",
-    # "no_float",
+    "no_float",
     "no_custom_syntax",
     "unchecked",
     "only_i32",
-    "f32_float",
+    #"f32_float",
     "no_index",
     "no_module",
     "no_closure",

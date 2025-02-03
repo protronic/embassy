@@ -43,7 +43,7 @@ async fn main(_spawner: Spawner) {
     info!("Starting system");
 
     unsafe {
-        LED = Some(Output::new(p.PB2, Level::High, Speed::Low));
+        LED = Some(Output::new(p.PC2, Level::High, Speed::Low));
     }
 
     let mut config = Config::default();
