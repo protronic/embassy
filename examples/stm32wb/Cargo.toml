@@ -12,6 +12,7 @@ embassy-sync = { version = "0.6.2", path = "../../embassy-sync", features = ["de
 embassy-executor = { version = "0.7.0", path = "../../embassy-executor", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }
 embassy-time = { version = "0.4.0", path = "../../embassy-time", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
 embassy-net = { version = "0.6.0", path = "../../embassy-net", features = ["defmt", "udp", "proto-ipv6", "medium-ieee802154", ], optional=true }
+embassy-embedded-hal = { version = "0.3.0", path = "../../embassy-embedded-hal/"}
 
 defmt = "0.3"
 defmt-rtt = "0.4"
@@ -39,6 +40,8 @@ rhai = { git = "https://github.com/rhaiscript/rhai.git", version = "1", default-
     "no_object",
     "no_function"
 ] }
+mcp25xxfd = { git = "https://github.com/protronic/mcp25xxFD.git", features = ["defmt"] }
+embedded-can = { git = "https://github.com/rust-embedded/embedded-hal.git", features = ["defmt-03"]}
 once_cell = { version = "1", default-features = false, features = ["race", "alloc"] }
 
 [features]
