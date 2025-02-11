@@ -5,10 +5,10 @@ use bme280_rs::{AsyncBme280, Humidity, Temperature};
 use defmt::*;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
-use embassy_rp::gpio::{Input, Level, Output, Pull};
-use embassy_rp::i2c;
-use embassy_rp::peripherals::{SPI0, I2C0};
-use embassy_rp::spi::{self, Spi};
+use embassy_stm32::gpio::{Input, Level, Output, Pull};
+use embassy_stm32::i2c;
+use embassy_stm32::peripherals::{SPI1, I2C1};
+use embassy_stm32::spi::{self, Spi};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_sync::channel::Channel;
@@ -23,18 +23,18 @@ use micromath::F32Ext;
 
 use {defmt_rtt as _, panic_probe as _};
 
-type SPI0Type<BUS> = Spi<'static, BUS, spi::Async>;
-static SPI_BUS0: StaticCell<Mutex<CriticalSectionRawMutex, SPI0Type<SPI0>>> = StaticCell::new();
+type SPI1Type<BUS> = Spi<'static, BUS, spi::Async>;
+static SPI_BUS1: StaticCell<Mutex<CriticalSectionRawMutex, SPI1Type<SPI1>>> = StaticCell::new();
 
 static FORWARDING_CHANNEL: Channel<CriticalSectionRawMutex, (StandardId, Vec<u8, 64>), 10> = Channel::new();
 
-static OBD_CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, MCP25xxFD<SpiDevice<CriticalSectionRawMutex, SPI0Type<SPI0>, Output>>>> = StaticCell::new();
-static COMMA_CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, MCP25xxFD<SpiDevice<CriticalSectionRawMutex, SPI0Type<SPI0>, Output>>>> = StaticCell::new();
+static OBD_CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, MCP25xxFD<SpiDevice<CriticalSectionRawMutex, SPI1Type<SPI1>, Output>>>> = StaticCell::new();
+static COMMA_CONTROLLER: StaticCell<Mutex<CriticalSectionRawMutex, MCP25xxFD<SpiDevice<CriticalSectionRawMutex, SPI1Type<SPI1>, Output>>>> = StaticCell::new();
 
 static CAR_OFF_SINCE: StaticCell<Mutex<CriticalSectionRawMutex, Option<Instant>>> = StaticCell::new();
 
-embassy_rp::bind_interrupts!(struct Irqs {
-    I2C0_IRQ => i2c::InterruptHandler<I2C0>;
+embassy_stm32::bind_interrupts!(struct Irqs {
+    I2C1_EV => i2c::InterruptHandler<I2C1>;
 });
 
 fn construct_uds_query(command: &[u8]) -> [u8; 8] {
@@ -49,6 +49,7 @@ fn construct_uds_query(command: &[u8]) -> [u8; 8] {
     }
     query
 }
+
 struct ECUAddresses {
     bms: Id,
     tpms: Id,
@@ -59,6 +60,7 @@ struct ECUAddresses {
     dash: Id,
     igpm: Id,
 }
+
 impl ECUAddresses {
     fn new() -> (Self, Self) {
         let tx = Self {
@@ -83,6 +85,7 @@ impl ECUAddresses {
         };
         (tx, rx)
     }
+
     fn address_offset<const O: i32>(ecu_addr: impl Into<Id>) -> Id {
         let ecu_addr = ecu_addr.into();
         match ecu_addr {
@@ -90,9 +93,11 @@ impl ECUAddresses {
             Id::Extended(addr) => ExtendedId::new(((addr.as_raw() as i32) + O) as u32).unwrap().into(),
         }
     }
+
     fn rx_address(ecu_addr: impl Into<Id>) -> Id {
         Self::address_offset::<8>(ecu_addr)
     }
+
     fn tx_address(ecu_addr: impl Into<Id>) -> Id {
         Self::address_offset::<-8>(ecu_addr)
     }
@@ -100,40 +105,40 @@ impl ECUAddresses {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
-    let p = embassy_rp::init(Default::default());
+    let p = embassy_stm32::init(Default::default());
     info!("Hello World!");
 
-    let miso = p.PIN_20;
-    let mosi = p.PIN_19;
-    let sclk = p.PIN_18;
-    let spi0 = Spi::new(
-        p.SPI0,
+    let miso = p.PA6;
+    let mosi = p.PA7;
+    let sclk = p.PA5;
+    let spi1 = Spi::new(
+        p.SPI1,
         sclk,
         mosi,
         miso,
-        p.DMA_CH0,
-        p.DMA_CH1,
+        p.DMA1_CH3,
+        p.DMA1_CH2,
         spi::Config::default(),
     );
-    let spi0 = SPI_BUS0.init(Mutex::new(spi0));
+    let spi1 = SPI_BUS1.init(Mutex::new(spi1));
 
-    let obd_cs = Output::new(p.PIN_21, Level::High);
-    let obd_int = Input::new(p.PIN_14, Pull::Up);
-    let mut obd_stby = Output::new(p.PIN_24, Level::Low);
+    let obd_cs = Output::new(p.PA4, Level::High);
+    let obd_int = Input::new(p.PB0, Pull::Up);
+    let mut obd_stby = Output::new(p.PB1, Level::Low);
     obd_stby.set_low();
 
-    let comma_cs = Output::new(p.PIN_22, Level::High);
-    let comma_int = Input::new(p.PIN_15, Pull::Up);
-    let mut comma_stby = Output::new(p.PIN_25, Level::Low);
+    let comma_cs = Output::new(p.PB10, Level::High);
+    let comma_int = Input::new(p.PB11, Pull::Up);
+    let mut comma_stby = Output::new(p.PB12, Level::Low);
     comma_stby.set_low();
 
-    let i2c = i2c::I2c::new_async(p.I2C0, p.PIN_1, p.PIN_0, Irqs, i2c::Config::default());
+    let i2c = i2c::I2c::new_async(p.I2C1, p.PB6, p.PB7, Irqs, i2c::Config::default());
 
     let car_off_since = CAR_OFF_SINCE.init(Mutex::new(None));
 
-    spawner.must_spawn(obd_task(spawner, spi0, obd_cs, obd_int, car_off_since));
+    spawner.must_spawn(obd_task(spawner, spi1, obd_cs, obd_int, car_off_since));
     spawner.must_spawn(bme_sender_task(i2c));
-    spawner.must_spawn(comma_task(spawner, spi0, comma_cs, comma_int, car_off_since));
+    spawner.must_spawn(comma_task(spawner, spi1, comma_cs, comma_int, car_off_since));
 }
 
 const TRANSMIT_FIFO: u8 = 1;
