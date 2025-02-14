@@ -5,9 +5,10 @@ use defmt::*;
 use embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice;
 use embassy_executor::Spawner;
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
-use embassy_stm32::i2c;
-use embassy_stm32::peripherals::{I2C1, SPI1};
-use embassy_stm32::spi::{self, Spi};
+use embassy_stm32::peripherals::{GPDMA1_CH3, I2C1, SPI1};
+use embassy_stm32::spi::Spi;
+use embassy_stm32::{i2c, spi};
+use embassy_stm32::mode::Async;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_sync::mutex::Mutex;
@@ -24,13 +25,15 @@ use static_cell::StaticCell;
 
 use {defmt_rtt as _, panic_probe as _};
 
-type SPI1Type<BUS> = Spi<'static, BUS, spi::Async>;
-static SPI_BUS1: StaticCell<Mutex<CriticalSectionRawMutex, SPI1Type<SPI1>>> = StaticCell::new();
+type SpiBusRef = StaticCell<Mutex<CriticalSectionRawMutex, Spi<'static, Async>>>;
+static SPI1_SHARED: SpiBusRef = StaticCell::new();
+
+type SpiSevRef = StaticCell<Mutex<CriticalSectionRawMutex, >>;
 
 static FORWARDING_CHANNEL: Channel<CriticalSectionRawMutex, (StandardId, Vec<u8, 64>), 10> = Channel::new();
 
 static OBD_CONTROLLER: StaticCell<
-    Mutex<CriticalSectionRawMutex, MCP25xxFD<SpiDevice<CriticalSectionRawMutex, SPI1Type<SPI1>, Output>>>,
+    Mutex<CriticalSectionRawMutex, MCP25xxFD<SpiDevice<CriticalSectionRawMutex, SpiBusRef, Output>>>,
 > = StaticCell::new();
 fn construct_uds_query(command: &[u8]) -> [u8; 8] {
     let mut query = [0u8; 8];
@@ -106,8 +109,16 @@ async fn main(spawner: Spawner) {
     let miso = p.PA6;
     let mosi = p.PA7;
     let sclk = p.PA5;
-    let spi1 = Spi::new(p.SPI1, sclk, mosi, miso, p.GPDMA1_CH3, p.GPDMA1_CH2, spi::Config::default());
-    let spi1 = SPI_BUS1.init(Mutex::new(spi1));
+    let spi1 = Spi::new(
+        p.SPI1,
+        sclk,
+        mosi,
+        miso,
+        p.GPDMA1_CH3,
+        p.GPDMA1_CH2,
+        embassy_stm32::spi::Config::default(),
+    );
+    let spi1 = SPI1_SHARED.init(Mutex::<CriticalSectionRawMutex, _>::new(spi1));
 
     let obd_cs = Output::new(p.PA4, Level::High, Speed::High);
     let obd_int = Input::new(p.PB0, Pull::Up);
@@ -115,11 +126,14 @@ async fn main(spawner: Spawner) {
     obd_stby.set_low();
 
     let comma_cs = Output::new(p.PB10, Level::High, Speed::High);
-    let comma_int = Input::new(p.PB11, Pull::Up);
+    let comma_int = Input::new(p.PB13, Pull::Up);
     let mut comma_stby = Output::new(p.PB12, Level::Low, Speed::High);
     comma_stby.set_low();
 
-    spawner.must_spawn(obd_task(spawner, spi1, obd_cs, obd_int));
+    let obd_device = SpiDevice::new(spi1, obd_cs);
+
+    let obd_controller = OBD_CONTROLLER.init(Mutex::new(MCP25xxFD::new(obd_device)));
+    spawner.must_spawn(obd_task(spawner, obd_controller, obd_int));
 }
 
 async fn wait_for_low(pin: &mut Input<'static>) {
@@ -141,14 +155,13 @@ const RX_IGPM_FIFO: u8 = 9;
 #[embassy_executor::task]
 async fn obd_task(
     spawner: Spawner,
-    spi_bus: &'static Mutex<CriticalSectionRawMutex, SPI1Type<SPI1>>,
-    cs: Output<'static>,
+    obd_controller: &'static Mutex<
+        CriticalSectionRawMutex,
+        MCP25xxFD<SpiDevice<'static, CriticalSectionRawMutex, SpiBusRef, Output<'static>>>,
+    >,
     mut int: Input<'static>,
 ) {
     let (tx_addrs, rx_addrs) = ECUAddresses::new();
-
-    let obd_device = SpiDevice::new(spi_bus, cs);
-    let obd_controller = OBD_CONTROLLER.init(Mutex::new(MCP25xxFD::new(obd_device)));
 
     {
         let mut obd_controller = obd_controller.lock().await;
@@ -466,7 +479,7 @@ async fn obd_task(
 async fn obd_sender_task(
     obd_controller: &'static Mutex<
         CriticalSectionRawMutex,
-        MCP25xxFD<SpiDevice<'static, CriticalSectionRawMutex, SPI1Type<SPI1>, Output<'static>>>,
+        MCP25xxFD<SpiDevice<'static, CriticalSectionRawMutex, SpiBusRef, Output<'static>>>,
     >,
     tx_addrs: ECUAddresses,
 ) {
