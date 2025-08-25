@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::Poll;
 
-use embassy_hal_internal::into_ref;
+use embassy_hal_internal::PeripheralType;
 use embassy_sync::waitqueue::AtomicWaker;
 use embassy_usb_driver as driver;
 use embassy_usb_driver::{
@@ -16,7 +16,7 @@ use crate::pac::usb::regs;
 use crate::pac::usb::vals::{EpType, Stat};
 use crate::pac::USBRAM;
 use crate::rcc::RccPeripheral;
-use crate::{interrupt, Peripheral};
+use crate::{interrupt, Peri};
 
 /// Interrupt handler.
 pub struct InterruptHandler<T: Instance> {
@@ -290,13 +290,12 @@ impl<'d, T: Instance> Driver<'d, T> {
     /// Create a new USB driver with start-of-frame (SOF) output.
     #[cfg(not(stm32l1))]
     pub fn new_with_sof(
-        _usb: impl Peripheral<P = T> + 'd,
+        _usb: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dp: impl Peripheral<P = impl DpPin<T>> + 'd,
-        dm: impl Peripheral<P = impl DmPin<T>> + 'd,
-        sof: impl Peripheral<P = impl SofPin<T>> + 'd,
+        dp: Peri<'d, impl DpPin<T>>,
+        dm: Peri<'d, impl DmPin<T>>,
+        sof: Peri<'d, impl SofPin<T>>,
     ) -> Self {
-        into_ref!(sof);
         {
             use crate::gpio::{AfType, OutputType, Speed};
             sof.set_as_af(sof.af_num(), AfType::output(OutputType::PushPull, Speed::VeryHigh));
@@ -307,13 +306,11 @@ impl<'d, T: Instance> Driver<'d, T> {
 
     /// Create a new USB driver.
     pub fn new(
-        _usb: impl Peripheral<P = T> + 'd,
+        _usb: Peri<'d, T>,
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
-        dp: impl Peripheral<P = impl DpPin<T>> + 'd,
-        dm: impl Peripheral<P = impl DmPin<T>> + 'd,
+        dp: Peri<'d, impl DpPin<T>>,
+        dm: Peri<'d, impl DmPin<T>>,
     ) -> Self {
-        into_ref!(dp, dm);
-
         super::common_init::<T>();
 
         let regs = T::regs();
@@ -362,9 +359,38 @@ impl<'d, T: Instance> Driver<'d, T> {
         addr
     }
 
+    fn is_endpoint_available<D: Dir>(&self, index: usize, ep_type: EndpointType) -> bool {
+        if index == 0 && ep_type != EndpointType::Control {
+            return false; // EP0 is reserved for control
+        }
+
+        let ep = match self.alloc.get(index) {
+            Some(ep) => ep,
+            None => return false,
+        };
+
+        let used = ep.used_out || ep.used_in;
+
+        if used && ep.ep_type == EndpointType::Isochronous {
+            // Isochronous endpoints are always double-buffered.
+            // Their corresponding endpoint/channel registers are forced to be unidirectional.
+            // Do not reuse this index.
+            // FIXME: Bulk endpoints can be double buffered, but are not in the current implementation.
+            return false;
+        }
+
+        let used_dir = match D::dir() {
+            Direction::Out => ep.used_out,
+            Direction::In => ep.used_in,
+        };
+
+        !used || (ep.ep_type == ep_type && !used_dir)
+    }
+
     fn alloc_endpoint<D: Dir>(
         &mut self,
         ep_type: EndpointType,
+        ep_addr: Option<EndpointAddress>,
         max_packet_size: u16,
         interval_ms: u8,
     ) -> Result<Endpoint<'d, T, D>, driver::EndpointAllocError> {
@@ -376,28 +402,17 @@ impl<'d, T: Instance> Driver<'d, T> {
             D::dir()
         );
 
-        let index = self.alloc.iter_mut().enumerate().find(|(i, ep)| {
-            if *i == 0 && ep_type != EndpointType::Control {
-                return false; // reserved for control pipe
-            }
-            let used = ep.used_out || ep.used_in;
-            if used && (ep.ep_type == EndpointType::Isochronous) {
-                // Isochronous endpoints are always double-buffered.
-                // Their corresponding endpoint/channel registers are forced to be unidirectional.
-                // Do not reuse this index.
-                // FIXME: Bulk endpoints can be double buffered, but are not in the current implementation.
-                return false;
-            }
-
-            let used_dir = match D::dir() {
-                Direction::Out => ep.used_out,
-                Direction::In => ep.used_in,
-            };
-            !used || (ep.ep_type == ep_type && !used_dir)
-        });
+        let index = if let Some(addr) = ep_addr {
+            // Use the specified endpoint address
+            self.is_endpoint_available::<D>(addr.index(), ep_type)
+                .then_some(addr.index())
+        } else {
+            // Find any available endpoint
+            (0..self.alloc.len()).find(|&i| self.is_endpoint_available::<D>(i, ep_type))
+        };
 
         let (index, ep) = match index {
-            Some(x) => x,
+            Some(i) => (i, &mut self.alloc[i]),
             None => return Err(EndpointAllocError),
         };
 
@@ -482,27 +497,29 @@ impl<'d, T: Instance> driver::Driver<'d> for Driver<'d, T> {
     fn alloc_endpoint_in(
         &mut self,
         ep_type: EndpointType,
+        ep_addr: Option<EndpointAddress>,
         max_packet_size: u16,
         interval_ms: u8,
     ) -> Result<Self::EndpointIn, driver::EndpointAllocError> {
-        self.alloc_endpoint(ep_type, max_packet_size, interval_ms)
+        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms)
     }
 
     fn alloc_endpoint_out(
         &mut self,
         ep_type: EndpointType,
+        ep_addr: Option<EndpointAddress>,
         max_packet_size: u16,
         interval_ms: u8,
     ) -> Result<Self::EndpointOut, driver::EndpointAllocError> {
-        self.alloc_endpoint(ep_type, max_packet_size, interval_ms)
+        self.alloc_endpoint(ep_type, ep_addr, max_packet_size, interval_ms)
     }
 
     fn start(mut self, control_max_packet_size: u16) -> (Self::Bus, Self::ControlPipe) {
         let ep_out = self
-            .alloc_endpoint(EndpointType::Control, control_max_packet_size, 0)
+            .alloc_endpoint(EndpointType::Control, None, control_max_packet_size, 0)
             .unwrap();
         let ep_in = self
-            .alloc_endpoint(EndpointType::Control, control_max_packet_size, 0)
+            .alloc_endpoint(EndpointType::Control, None, control_max_packet_size, 0)
             .unwrap();
         assert_eq!(ep_out.info.addr.index(), 0);
         assert_eq!(ep_in.info.addr.index(), 0);
@@ -887,6 +904,16 @@ impl<'d, T: Instance> driver::EndpointOut for Endpoint<'d, T, Out> {
         })
         .await;
 
+        // Errata for STM32H5, 2.20.1:
+        // During OUT transfers, the correct transfer interrupt (CTR) is triggered a little before the last USB SRAM accesses
+        // have completed. If the software responds quickly to the interrupt, the full buffer contents may not be correct.
+        //
+        // Workaround:
+        // Software should ensure that a small delay is included before accessing the SRAM contents. This delay should be
+        // 800 ns in Full Speed mode and 6.4 μs in Low Speed mode.
+        #[cfg(stm32h5)]
+        embassy_time::block_for(embassy_time::Duration::from_nanos(800));
+
         RX_COMPLETE[index].store(false, Ordering::Relaxed);
 
         if stat == Stat::DISABLED {
@@ -904,6 +931,8 @@ impl<'d, T: Instance> driver::EndpointOut for Endpoint<'d, T, Out> {
             };
             self.read_data_double_buffered(buf, packet_buffer)?
         } else {
+            let len = self.read_data(buf)?;
+
             regs.epr(index).write(|w| {
                 w.set_ep_type(convert_type(self.info.ep_type));
                 w.set_ea(self.info.addr.index() as _);
@@ -913,7 +942,7 @@ impl<'d, T: Instance> driver::EndpointOut for Endpoint<'d, T, Out> {
                 w.set_ctr_tx(true); // don't clear
             });
 
-            self.read_data(buf)?
+            len
         };
         trace!("READ OK, rx_len = {}", rx_len);
 
@@ -1226,7 +1255,7 @@ trait SealedInstance {
 
 /// USB instance trait.
 #[allow(private_bounds)]
-pub trait Instance: SealedInstance + RccPeripheral + 'static {
+pub trait Instance: SealedInstance + PeripheralType + RccPeripheral + 'static {
     /// Interrupt for this USB instance.
     type Interrupt: interrupt::typelevel::Interrupt;
 }

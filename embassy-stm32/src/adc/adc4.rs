@@ -1,12 +1,21 @@
+#[cfg(stm32u5)]
+use pac::adc::vals::{Adc4Dmacfg as Dmacfg, Adc4Exten as Exten, Adc4OversamplingRatio as OversamplingRatio};
 #[allow(unused)]
-use pac::adc::vals::{Adc4Dmacfg, Adc4Exten, Adc4OversamplingRatio};
+#[cfg(stm32wba)]
+use pac::adc::vals::{Chselrmod, Cont, Dmacfg, Exten, OversamplingRatio, Ovss, Smpsel};
 
 use super::{blocking_delay_us, AdcChannel, AnyAdcChannel, RxDma4, SealedAdcChannel};
 use crate::dma::Transfer;
-pub use crate::pac::adc::regs::Adc4Chselrmod0;
+#[cfg(stm32u5)]
+pub use crate::pac::adc::regs::Adc4Chselrmod0 as Chselr;
+#[cfg(stm32wba)]
+pub use crate::pac::adc::regs::Chselr;
+#[cfg(stm32u5)]
 pub use crate::pac::adc::vals::{Adc4Presc as Presc, Adc4Res as Resolution, Adc4SampleTime as SampleTime};
+#[cfg(stm32wba)]
+pub use crate::pac::adc::vals::{Presc, Res as Resolution, SampleTime};
 use crate::time::Hertz;
-use crate::{pac, rcc, Peripheral};
+use crate::{pac, rcc, Peri};
 
 const MAX_ADC_CLK_FREQ: Hertz = Hertz::mhz(55);
 
@@ -67,12 +76,14 @@ impl<T: Instance> SealedAdcChannel<T> for Vcore {
     }
 }
 
+#[derive(Copy, Clone)]
 pub enum DacChannel {
     OUT1,
     OUT2,
 }
 
 /// Number of samples used for averaging.
+#[derive(Copy, Clone)]
 pub enum Averaging {
     Disabled,
     Samples2,
@@ -169,16 +180,16 @@ pub trait SealedInstance {
     fn regs() -> crate::pac::adc::Adc4;
 }
 
-pub trait Instance: SealedInstance + crate::Peripheral<P = Self> + crate::rcc::RccPeripheral {
+pub trait Instance: SealedInstance + crate::PeripheralType + crate::rcc::RccPeripheral {
     type Interrupt: crate::interrupt::typelevel::Interrupt;
 }
 
 pub struct Adc4<'d, T: Instance> {
     #[allow(unused)]
-    adc: crate::PeripheralRef<'d, T>,
+    adc: crate::Peri<'d, T>,
 }
 
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum Adc4Error {
     InvalidSequence,
     DMAError,
@@ -186,15 +197,14 @@ pub enum Adc4Error {
 
 impl<'d, T: Instance> Adc4<'d, T> {
     /// Create a new ADC driver.
-    pub fn new(adc: impl Peripheral<P = T> + 'd) -> Self {
-        embassy_hal_internal::into_ref!(adc);
+    pub fn new(adc: Peri<'d, T>) -> Self {
         rcc::enable_and_reset::<T>();
         let prescaler = Prescaler::from_ker_ck(T::frequency());
 
         T::regs().ccr().modify(|w| w.set_presc(prescaler.presc()));
 
         let frequency = Hertz(T::frequency().0 / prescaler.divisor());
-        info!("ADC4 frequency set to {} Hz", frequency.0);
+        info!("ADC4 frequency set to {}", frequency);
 
         if frequency > MAX_ADC_CLK_FREQ {
             panic!("Maximal allowed frequency for ADC4 is {} MHz and it varies with different packages, refer to ST docs for more information.", MAX_ADC_CLK_FREQ.0 /  1_000_000 );
@@ -243,16 +253,27 @@ impl<'d, T: Instance> Adc4<'d, T> {
     fn configure(&mut self) {
         // single conversion mode, software trigger
         T::regs().cfgr1().modify(|w| {
+            #[cfg(stm32u5)]
             w.set_cont(false);
+            #[cfg(stm32wba)]
+            w.set_cont(Cont::SINGLE);
             w.set_discen(false);
-            w.set_exten(Adc4Exten::DISABLED);
+            w.set_exten(Exten::DISABLED);
+            #[cfg(stm32u5)]
             w.set_chselrmod(false);
+            #[cfg(stm32wba)]
+            w.set_chselrmod(Chselrmod::ENABLE_INPUT);
         });
 
         // only use one channel at the moment
         T::regs().smpr().modify(|w| {
+            #[cfg(stm32u5)]
             for i in 0..24 {
                 w.set_smpsel(i, false);
+            }
+            #[cfg(stm32wba)]
+            for i in 0..14 {
+                w.set_smpsel(i, Smpsel::SMP1);
             }
         });
     }
@@ -276,6 +297,7 @@ impl<'d, T: Instance> Adc4<'d, T> {
     }
 
     /// Enable reading the vbat internal channel.
+    #[cfg(stm32u5)]
     pub fn enable_vbat(&self) -> Vbat {
         T::regs().ccr().modify(|w| {
             w.set_vbaten(true);
@@ -290,6 +312,7 @@ impl<'d, T: Instance> Adc4<'d, T> {
     }
 
     /// Enable reading the vbat internal channel.
+    #[cfg(stm32u5)]
     pub fn enable_dac_channel(&self, dac: DacChannel) -> Dac {
         let mux;
         match dac {
@@ -318,17 +341,38 @@ impl<'d, T: Instance> Adc4<'d, T> {
     }
 
     /// Set hardware averaging.
+    #[cfg(stm32u5)]
     pub fn set_averaging(&mut self, averaging: Averaging) {
         let (enable, samples, right_shift) = match averaging {
-            Averaging::Disabled => (false, Adc4OversamplingRatio::OVERSAMPLE2X, 0),
-            Averaging::Samples2 => (true, Adc4OversamplingRatio::OVERSAMPLE2X, 1),
-            Averaging::Samples4 => (true, Adc4OversamplingRatio::OVERSAMPLE4X, 2),
-            Averaging::Samples8 => (true, Adc4OversamplingRatio::OVERSAMPLE8X, 3),
-            Averaging::Samples16 => (true, Adc4OversamplingRatio::OVERSAMPLE16X, 4),
-            Averaging::Samples32 => (true, Adc4OversamplingRatio::OVERSAMPLE32X, 5),
-            Averaging::Samples64 => (true, Adc4OversamplingRatio::OVERSAMPLE64X, 6),
-            Averaging::Samples128 => (true, Adc4OversamplingRatio::OVERSAMPLE128X, 7),
-            Averaging::Samples256 => (true, Adc4OversamplingRatio::OVERSAMPLE256X, 8),
+            Averaging::Disabled => (false, OversamplingRatio::OVERSAMPLE2X, 0),
+            Averaging::Samples2 => (true, OversamplingRatio::OVERSAMPLE2X, 1),
+            Averaging::Samples4 => (true, OversamplingRatio::OVERSAMPLE4X, 2),
+            Averaging::Samples8 => (true, OversamplingRatio::OVERSAMPLE8X, 3),
+            Averaging::Samples16 => (true, OversamplingRatio::OVERSAMPLE16X, 4),
+            Averaging::Samples32 => (true, OversamplingRatio::OVERSAMPLE32X, 5),
+            Averaging::Samples64 => (true, OversamplingRatio::OVERSAMPLE64X, 6),
+            Averaging::Samples128 => (true, OversamplingRatio::OVERSAMPLE128X, 7),
+            Averaging::Samples256 => (true, OversamplingRatio::OVERSAMPLE256X, 8),
+        };
+
+        T::regs().cfgr2().modify(|w| {
+            w.set_ovsr(samples);
+            w.set_ovss(right_shift);
+            w.set_ovse(enable)
+        })
+    }
+    #[cfg(stm32wba)]
+    pub fn set_averaging(&mut self, averaging: Averaging) {
+        let (enable, samples, right_shift) = match averaging {
+            Averaging::Disabled => (false, OversamplingRatio::OVERSAMPLE2X, Ovss::SHIFT0),
+            Averaging::Samples2 => (true, OversamplingRatio::OVERSAMPLE2X, Ovss::SHIFT1),
+            Averaging::Samples4 => (true, OversamplingRatio::OVERSAMPLE4X, Ovss::SHIFT2),
+            Averaging::Samples8 => (true, OversamplingRatio::OVERSAMPLE8X, Ovss::SHIFT3),
+            Averaging::Samples16 => (true, OversamplingRatio::OVERSAMPLE16X, Ovss::SHIFT4),
+            Averaging::Samples32 => (true, OversamplingRatio::OVERSAMPLE32X, Ovss::SHIFT5),
+            Averaging::Samples64 => (true, OversamplingRatio::OVERSAMPLE64X, Ovss::SHIFT6),
+            Averaging::Samples128 => (true, OversamplingRatio::OVERSAMPLE128X, Ovss::SHIFT7),
+            Averaging::Samples256 => (true, OversamplingRatio::OVERSAMPLE256X, Ovss::SHIFT8),
         };
 
         T::regs().cfgr2().modify(|w| {
@@ -343,10 +387,20 @@ impl<'d, T: Instance> Adc4<'d, T> {
         channel.setup();
 
         // Select channel
-        T::regs().chselrmod0().write_value(Adc4Chselrmod0(0_u32));
-        T::regs().chselrmod0().modify(|w| {
-            w.set_chsel(channel.channel() as usize, true);
-        });
+        #[cfg(stm32wba)]
+        {
+            T::regs().chselr().write_value(Chselr(0_u32));
+            T::regs().chselr().modify(|w| {
+                w.set_chsel0(channel.channel() as usize, true);
+            });
+        }
+        #[cfg(stm32u5)]
+        {
+            T::regs().chselrmod0().write_value(Chselr(0_u32));
+            T::regs().chselrmod0().modify(|w| {
+                w.set_chsel(channel.channel() as usize, true);
+            });
+        }
 
         // Reset interrupts
         T::regs().isr().modify(|reg| {
@@ -379,15 +433,15 @@ impl<'d, T: Instance> Adc4<'d, T> {
     /// let mut adc4 = adc4::Adc4::new(p.ADC4);
     /// let mut adc4_pin1 = p.PC1;
     /// let mut adc4_pin2 = p.PC0;
-    /// let mut degraded41 = adc4_pin1.degrade_adc();
-    /// let mut degraded42 = adc4_pin2.degrade_adc();
+    /// let mut.into()d41 = adc4_pin1.into();
+    /// let mut.into()d42 = adc4_pin2.into();
     /// let mut measurements = [0u16; 2];
     /// // not that the channels must be in ascending order
     /// adc4.read(
     ///     &mut p.GPDMA1_CH1,
     ///    [
-    ///        &mut degraded42,
-    ///        &mut degraded41,
+    ///        &mut.into()d42,
+    ///        &mut.into()d41,
     ///    ]
     ///    .into_iter(),
     ///    &mut measurements,
@@ -395,7 +449,7 @@ impl<'d, T: Instance> Adc4<'d, T> {
     /// ```
     pub async fn read(
         &mut self,
-        rx_dma: &mut impl RxDma4<T>,
+        rx_dma: Peri<'_, impl RxDma4<T>>,
         sequence: impl ExactSizeIterator<Item = &mut AnyAdcChannel<T>>,
         readings: &mut [u16],
     ) -> Result<(), Adc4Error> {
@@ -416,13 +470,19 @@ impl<'d, T: Instance> Adc4<'d, T> {
 
         T::regs().cfgr1().modify(|reg| {
             reg.set_dmaen(true);
-            reg.set_dmacfg(Adc4Dmacfg::ONE_SHOT);
+            reg.set_dmacfg(Dmacfg::ONE_SHOT);
+            #[cfg(stm32u5)]
             reg.set_chselrmod(false);
+            #[cfg(stm32wba)]
+            reg.set_chselrmod(Chselrmod::ENABLE_INPUT)
         });
 
         // Verify and activate sequence
         let mut prev_channel: i16 = -1;
-        T::regs().chselrmod0().write_value(Adc4Chselrmod0(0_u32));
+        #[cfg(stm32wba)]
+        T::regs().chselr().write_value(Chselr(0_u32));
+        #[cfg(stm32u5)]
+        T::regs().chselrmod0().write_value(Chselr(0_u32));
         for channel in sequence {
             let channel_num = channel.channel;
             if channel_num as i16 <= prev_channel {
@@ -430,6 +490,11 @@ impl<'d, T: Instance> Adc4<'d, T> {
             };
             prev_channel = channel_num as i16;
 
+            #[cfg(stm32wba)]
+            T::regs().chselr().modify(|w| {
+                w.set_chsel0(channel.channel as usize, true);
+            });
+            #[cfg(stm32u5)]
             T::regs().chselrmod0().modify(|w| {
                 w.set_chsel(channel.channel as usize, true);
             });
