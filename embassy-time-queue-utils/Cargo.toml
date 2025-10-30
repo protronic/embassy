@@ -1,7 +1,7 @@
 [package]
 name = "embassy-time-queue-utils"
 version = "0.3.0"
-edition = "2021"
+edition = "2024"
 description = "Timer queue driver trait for embassy-time"
 repository = "https://github.com/embassy-rs/embassy"
 documentation = "https://docs.embassy.dev/embassy-time-queue-utils"
@@ -56,6 +56,9 @@ _generic-queue = []
 build = [
     {target = "thumbv6m-none-eabi", features = []},
     {target = "thumbv6m-none-eabi", features = ["generic-queue-8"]},
+    # Xtensa builds
+    {group = "xtensa", build-std = ["core", "alloc"],  target = "xtensa-esp32s2-none-elf", features = []},
+    {group = "xtensa", build-std = ["core", "alloc"],  target = "xtensa-esp32s2-none-elf", features = ["generic-queue-8"]},
 ]
 
 [package.metadata.embassy_docs]

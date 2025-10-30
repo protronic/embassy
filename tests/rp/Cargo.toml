@@ -1,5 +1,5 @@
 [package]
-edition = "2021"
+edition = "2024"
 name = "embassy-rp-tests"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
@@ -62,6 +62,12 @@ required-features = [ "rp2040",]
 [[bin]]
 name = "float"
 path = "src/bin/float.rs"
+required-features = [ "rp2040",]
+
+# RTC is only available on RP2040
+[[bin]]
+name = "rtc"
+path = "src/bin/rtc.rs"
 required-features = [ "rp2040",]
 
 [profile.dev]
