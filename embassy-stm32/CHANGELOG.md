@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - change: stm32/uart: BufferedUartRx now returns all available bytes from the internal buffer
 - change: timer: added output compare values
 - feat: timer: add ability to set master mode
+- fix: usart: fix race condition in ringbuffered usart
+- feat: stm32/fdcan: add ability to control automatic recovery from bus off ([#4821](https://github.com/embassy-rs/embassy/pull/4821))
 
 ## 0.4.0 - 2025-08-26
 
@@ -49,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - chore: Updated stm32-metapac and stm32-data dependencies
 - feat: stm32/adc/v3: allow DMA reads to loop through enable channels
 - fix: Fix XSPI not disabling alternate bytes when they were previously enabled
+- feat: stm32/adc/v3: added support for Continuous DMA configuration 
 - fix: Fix stm32h7rs init when using external flash via XSPI
 - feat: Add Adc::new_with_clock() to configure analog clock
 - feat: Add GPDMA linked-list + ringbuffer support ([#3923](https://github.com/embassy-rs/embassy/pull/3923))
