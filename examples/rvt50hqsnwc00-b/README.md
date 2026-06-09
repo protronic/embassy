@@ -90,8 +90,14 @@ cargo run --features lvgl --bin lvgl_demo
   - Project configs in `touch-projects/SporthalleLudwigsfelde/`
   - UI built in Rust via the `lvgl` crate (`src/hall_ui.rs`), not hand-written C widgets
   - One-hot TX on CAN ID `0x200`, `minp` feedback on `0x285`
-  - Requires `gcc-arm-none-eabi` and `picolibc-arm-none-eabi` (LVGL C library via `lvgl-sys`)
-  - Run with: `cargo run --bin lvgl_touch_can --features lvgl,touch`
+  - Requires `arm-none-eabi-gcc` and C headers for bindgen (`lvgl-sys` builds LVGL as C)
+  - Before building, source the toolchain env (paths vary per machine):
+    ```bash
+    source scripts/lvgl-env.sh
+    cargo run --bin lvgl_touch_can --features lvgl,touch
+    ```
+  - Debian/Ubuntu: `sudo apt install gcc-arm-none-eabi picolibc-arm-none-eabi`
+  - PlatformIO toolchain also works; see `.cargo/config.toml.example`
 
 ## Configuration
 
