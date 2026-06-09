@@ -88,8 +88,9 @@ cargo run --features lvgl --bin lvgl_demo
 
 - `lvgl_touch_can.rs` - JSON-driven hall lighting UI with CAN press/hold/repeat
   - Project configs in `touch-projects/SporthalleLudwigsfelde/`
+  - UI built in Rust via the `lvgl` crate (`src/hall_ui.rs`), not hand-written C widgets
   - One-hot TX on CAN ID `0x200`, `minp` feedback on `0x285`
-  - Requires `gcc-arm-none-eabi` and `picolibc-arm-none-eabi` for the LVGL C build
+  - Requires `gcc-arm-none-eabi` and `picolibc-arm-none-eabi` (LVGL C library via `lvgl-sys`)
   - Run with: `cargo run --bin lvgl_touch_can --features lvgl,touch`
 
 ## Configuration

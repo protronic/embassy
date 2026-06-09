@@ -15,6 +15,7 @@
 compile_error!("lvgl_touch_can requires --features lvgl,touch");
 
 use core::sync::atomic::{AtomicU8, Ordering};
+use core::time::Duration as CoreDuration;
 
 use defmt::{info, unwrap, warn};
 use embassy_executor::Spawner;
@@ -22,6 +23,7 @@ use embassy_futures::select::{select, Either};
 use embassy_rvt50hqsnwc00_b_examples::can_bridge::{
     self, frame_standard_id, handle_minp_frame, send_command, send_release, set_active_button,
 };
+use embassy_rvt50hqsnwc00_b_examples::hall_ui::{self, HallUi};
 use embassy_rvt50hqsnwc00_b_examples::rvt50_board::{self, CAN_BITRATE};
 use embassy_rvt50hqsnwc00_b_examples::touch_config::{self, BUTTON_COUNT, CAN_ENABLED, MINP_RX_ID};
 use embassy_stm32::can::{CanRx, CanTx};
@@ -32,10 +34,9 @@ use embassy_stm32::peripherals;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
+use lvgl::{task_handler, tick_inc};
 use static_cell::StaticCell;
 use {defmt_rtt as _, panic_probe as _};
-
-use lvgl_sys as _;
 
 const FB_PIXELS: usize =
     touch_config::DISPLAY_WIDTH as usize * touch_config::DISPLAY_HEIGHT as usize;
@@ -44,6 +45,7 @@ const MAX_BUTTONS: usize = 64;
 static FB1: StaticCell<[u16; FB_PIXELS]> = StaticCell::new();
 static CAN_TX: StaticCell<CanTx<'static>> = StaticCell::new();
 static CAN_RX: StaticCell<CanRx<'static>> = StaticCell::new();
+static HALL_UI: StaticCell<HallUi> = StaticCell::new();
 
 static BUTTON_STATUS: [AtomicU8; MAX_BUTTONS] = [const { AtomicU8::new(0) }; MAX_BUTTONS];
 
@@ -54,28 +56,11 @@ enum CanAction {
 
 static CAN_ACTIONS: Channel<CriticalSectionRawMutex, CanAction, 8> = Channel::new();
 
-unsafe extern "C" {
-    static g_hall_ui_layout: HallUiLayout;
-    fn hall_ui_init(framebuffer: *mut u16, width: u16, height: u16, layout: *const HallUiLayout);
-    fn hall_ui_set_touch(x: u16, y: u16, pressed: bool);
-    fn hall_ui_tick(ms: u32);
-    fn hall_ui_handler();
-    fn hall_ui_set_button_active(button_index: u8, active: bool);
-    fn hall_ui_set_callbacks(on_press: Option<extern "C" fn(u8)>, on_release: Option<extern "C" fn()>);
-}
-
-#[repr(C)]
-struct HallUiLayout {
-    _opaque: [u8; 0],
-}
-
-#[unsafe(no_mangle)]
-extern "C" fn rvt50_hall_on_press(button_index: u8) {
+fn on_button_press(button_index: u8) {
     let _ = CAN_ACTIONS.try_send(CanAction::Press(button_index));
 }
 
-#[unsafe(no_mangle)]
-extern "C" fn rvt50_hall_on_release() {
+fn on_button_release() {
     let _ = CAN_ACTIONS.try_send(CanAction::Release);
 }
 
@@ -193,37 +178,28 @@ async fn lvgl_touch_task(
     ltdc.init_layer(&layer_config, None);
 
     let fb = FB1.init([0; FB_PIXELS]);
+    let fb_ptr = fb.as_mut_ptr();
+    let ui = HALL_UI.init(
+        hall_ui::setup(fb_ptr, on_button_press, on_button_release).expect("hall UI setup"),
+    );
 
-    unsafe {
-        hall_ui_set_callbacks(Some(rvt50_hall_on_press), Some(rvt50_hall_on_release));
-        hall_ui_init(
-            fb.as_mut_ptr(),
-            touch_config::DISPLAY_WIDTH,
-            touch_config::DISPLAY_HEIGHT,
-            &raw const g_hall_ui_layout,
-        );
-    }
-
-    ltdc.set_buffer(LtdcLayer::Layer1, fb.as_ptr() as *const _)
+    ltdc.set_buffer(LtdcLayer::Layer1, fb_ptr as *const _)
         .await
         .unwrap();
 
     loop {
         let touch = rvt50_board::read_touch(&mut i2c);
-        unsafe {
-            hall_ui_set_touch(touch.x, touch.y, touch.pressed);
-            hall_ui_tick(5);
-            hall_ui_handler();
-        }
+        hall_ui::set_touch(touch.x, touch.y, touch.pressed);
+
+        tick_inc(CoreDuration::from_millis(5));
+        task_handler();
 
         for i in 0..BUTTON_COUNT {
             let active = BUTTON_STATUS[i].load(Ordering::Relaxed) != 0;
-            unsafe {
-                hall_ui_set_button_active(i as u8, active);
-            }
+            ui.set_button_active(i, active);
         }
 
-        ltdc.set_buffer(LtdcLayer::Layer1, fb.as_ptr() as *const _)
+        ltdc.set_buffer(LtdcLayer::Layer1, fb_ptr as *const _)
             .await
             .unwrap();
 

@@ -32,14 +32,21 @@ heapless = { version = "0.9", default-features = false }
 static_cell = "2"
 
 # Optional LVGL dependencies (lvgl-sys builds the C library; port.c provides drivers)
+embedded-graphics = { version = "0.8.0", default-features = false, optional = true }
+lvgl = { version = "0.6.2", optional = true, default-features = false, features = [
+  "unsafe_no_autoinit",
+  "embedded_graphics",
+  "lvgl_alloc",
+] }
 lvgl-sys = { version = "0.6.2", optional = true }
+cstr_core = { version = "0.2.6", optional = true, default-features = false, features = ["alloc"] }
 
 [features]
 default = []
 # Capacitive touch panel (RVT50HQSNWC00 and similar variants)
 touch = []
 # Enable LVGL support (requires lv_conf.h via DEP_LV_CONFIG_PATH)
-lvgl = ["dep:lvgl-sys"]
+lvgl = ["dep:lvgl-sys", "dep:lvgl", "dep:cstr_core", "dep:embedded-graphics"]
 # Convenience alias for the touch demo binary
 lvgl-touch = ["lvgl", "touch"]
 # JSON-driven hall lighting UI with CAN press/hold/repeat
