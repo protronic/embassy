@@ -83,6 +83,15 @@ Or use the feature flag:
 cargo run --features lvgl --bin lvgl_demo
 ```
 
+- `lvgl_touch.rs` - LVGL with capacitive touch input
+  - Run with: `cargo run --bin lvgl_touch --features lvgl,touch`
+
+- `lvgl_touch_can.rs` - JSON-driven hall lighting UI with CAN press/hold/repeat
+  - Project configs in `touch-projects/SporthalleLudwigsfelde/`
+  - One-hot TX on CAN ID `0x200`, `minp` feedback on `0x285`
+  - Requires `gcc-arm-none-eabi` and `picolibc-arm-none-eabi` for the LVGL C build
+  - Run with: `cargo run --bin lvgl_touch_can --features lvgl,touch`
+
 ## Configuration
 
 The examples are configured for:

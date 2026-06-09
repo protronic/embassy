@@ -9,6 +9,7 @@ description = "Examples for Riverdi RVT50HQSNWC00-B board with STM32U5A9NJH6Q"
 
 [build-dependencies]
 cc = "1.2"
+serde_json = "1.0"
 
 [dependencies]
 # RVT50HQSNWC00-B uses STM32U5A9NJH6Q with 4MB Flash, 2.5MB RAM
@@ -41,6 +42,8 @@ touch = []
 lvgl = ["dep:lvgl-sys"]
 # Convenience alias for the touch demo binary
 lvgl-touch = ["lvgl", "touch"]
+# JSON-driven hall lighting UI with CAN press/hold/repeat
+lvgl-touch-can = ["lvgl", "touch"]
 
 ## Use secure registers when TrustZone is enabled
 trustzone-secure = ["embassy-stm32/trustzone-secure"]
