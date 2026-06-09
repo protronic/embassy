@@ -96,6 +96,12 @@ fn generate_touch_config(manifest_dir: &Path, out_dir: &Path) {
         ui["group_eyebrow"].as_str().unwrap_or("")
     )
     .unwrap();
+    writeln!(
+        rust,
+        "pub const SUMMARY_READY: &str = {:?};",
+        ui["summary_ready"].as_str().unwrap_or("Lichtsteuerung bereit")
+    )
+    .unwrap();
     writeln!(rust).unwrap();
 
     writeln!(rust, "pub struct FieldLayout {{").unwrap();

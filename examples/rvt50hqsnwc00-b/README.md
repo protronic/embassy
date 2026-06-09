@@ -88,16 +88,16 @@ cargo run --features lvgl --bin lvgl_demo
 
 - `lvgl_touch_can.rs` - JSON-driven hall lighting UI with CAN press/hold/repeat
   - Project configs in `touch-projects/SporthalleLudwigsfelde/`
-  - UI built in Rust via the `lvgl` crate (`src/hall_ui.rs`), not hand-written C widgets
+  - UI via [lv_binding_rust](https://github.com/lvgl/lv_binding_rust) in `src/lvgl/` (display, touch, theme, hall UI)
+  - Board patterns from [riverdi-50-stm32u5-lvgl](https://github.com/riverdi/riverdi-50-stm32u5-lvgl); legacy C port in `lvgl-port/` for older demos only
   - One-hot TX on CAN ID `0x200`, `minp` feedback on `0x285`
-  - Requires `arm-none-eabi-gcc` and C headers for bindgen (`lvgl-sys` builds LVGL as C)
-  - Before building, source the toolchain env (paths vary per machine):
+  - Requires `arm-none-eabi-gcc` and picolibc headers for bindgen (`lvgl-sys` builds LVGL as C)
+  - Recommended build wrapper (sets bindgen + cross CC):
     ```bash
-    source scripts/lvgl-env.sh
-    cargo run --bin lvgl_touch_can --features lvgl,touch
+    ./scripts/cargo-lvgl.sh run --bin lvgl_touch_can --features lvgl,touch
     ```
+  - Or manually: `source scripts/lvgl-env.sh` then `cargo run --bin lvgl_touch_can --features lvgl,touch`
   - Debian/Ubuntu: `sudo apt install gcc-arm-none-eabi picolibc-arm-none-eabi`
-  - PlatformIO toolchain also works; see `.cargo/config.toml.example`
 
 ## Configuration
 

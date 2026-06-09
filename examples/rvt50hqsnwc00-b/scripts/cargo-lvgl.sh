@@ -10,8 +10,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=/dev/null
 source "${ROOT}/scripts/lvgl-env.sh"
 
-GCC="${ARM_NONE_EABI_GCC:-arm-none-eabi-gcc}"
-if ! command -v "${GCC}" >/dev/null 2>&1; then
+if [[ -n "${ARM_NONE_EABI_GCC:-}" && -x "${ARM_NONE_EABI_GCC}" ]]; then
+    GCC="${ARM_NONE_EABI_GCC}"
+elif command -v arm-none-eabi-gcc >/dev/null 2>&1; then
+    GCC="$(command -v arm-none-eabi-gcc)"
+else
     GCC="${HOME}/.platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-gcc"
 fi
 GCC_DIR="$(dirname "${GCC}")"
