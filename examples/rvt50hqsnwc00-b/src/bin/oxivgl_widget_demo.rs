@@ -8,6 +8,11 @@
 //! the STM32U5 LTDC RGB565 panel. This is the Rust/OxivGL counterpart to widget
 //! demos in Riverdi's `riverdi-50-stm32u5-lvgl` Cube project.
 //!
+//! With the `touch` feature, touch input is interrupt-driven: a dedicated task
+//! sleeps on the CTP_INT EXTI line (PE6) and only polls the I2C controller
+//! while a contact is in progress. The UI task consumes the published samples
+//! through a standard timer-mode LVGL pointer indev.
+//!
 //! **Requires nightly Rust** (see `rust-toolchain.toml` in this crate).
 //!
 //! ```bash
@@ -20,13 +25,13 @@ extern crate alloc;
 use core::mem::MaybeUninit;
 
 use defmt::{info, unwrap};
-use embedded_alloc::LlffHeap as Heap;
 use embassy_executor::Spawner;
 use embassy_rvt50hqsnwc00_b_examples::oxivgl::platform::{self, LVGL_BUF_BYTES};
 use embassy_rvt50hqsnwc00_b_examples::rvt50_board::{self, DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use embassy_stm32::ltdc::{self, Ltdc};
 use embassy_stm32::peripherals;
 use embassy_time::Timer;
+use embedded_alloc::LlffHeap as Heap;
 use oxivgl::display::LvglBuffers;
 use {defmt_rtt as _, panic_probe as _};
 
@@ -50,10 +55,7 @@ fn init_heap() {
 async fn main(spawner: Spawner) -> ! {
     init_heap();
 
-    info!(
-        "RVT50 OxivGL widget demo ({}x{})",
-        DISPLAY_WIDTH, DISPLAY_HEIGHT
-    );
+    info!("RVT50 OxivGL widget demo ({}x{})", DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
     let p = rvt50_board::init_clocks();
     rvt50_board::enable_icache();
@@ -65,9 +67,9 @@ async fn main(spawner: Spawner) -> ! {
 
     #[cfg(feature = "touch")]
     {
-        let rvt50_board::DisplayResources { ltdc, i2c, touch_int: _ } =
-            rvt50_board::init_display(p).await;
-        spawner.spawn(unwrap!(ui_touch_task(ltdc, i2c, bufs)));
+        let rvt50_board::DisplayResources { ltdc, i2c, touch_int } = rvt50_board::init_display(p).await;
+        spawner.spawn(unwrap!(touch_task(i2c, touch_int)));
+        spawner.spawn(unwrap!(ui_task(ltdc, bufs)));
     }
 
     #[cfg(not(feature = "touch"))]
@@ -89,7 +91,6 @@ async fn heartbeat_info_task() -> ! {
     }
 }
 
-#[cfg(not(feature = "touch"))]
 #[embassy_executor::task]
 async fn ui_task(
     ltdc: Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>,
@@ -98,16 +99,12 @@ async fn ui_task(
     platform::run_widget_demo(ltdc, bufs).await
 }
 
+/// Interrupt-driven touch sampling on CTP_INT (PE6) + I2C1.
 #[cfg(feature = "touch")]
 #[embassy_executor::task]
-async fn ui_touch_task(
-    ltdc: Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>,
-    i2c: embassy_stm32::i2c::I2c<
-        'static,
-        embassy_stm32::mode::Blocking,
-        embassy_stm32::i2c::Master,
-    >,
-    bufs: &'static mut LvglBuffers<{ LVGL_BUF_BYTES }>,
+async fn touch_task(
+    i2c: embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Blocking, embassy_stm32::i2c::Master>,
+    touch_int: embassy_stm32::exti::ExtiInput<'static, embassy_stm32::mode::Async>,
 ) -> ! {
-    platform::run_widget_demo(ltdc, bufs, i2c).await
+    platform::run_touch(i2c, touch_int).await
 }

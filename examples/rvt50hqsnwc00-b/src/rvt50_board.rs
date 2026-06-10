@@ -161,7 +161,7 @@ bind_interrupts!(pub struct ButtonIrqs {
     EXTI3 => exti::InterruptHandler<interrupt::typelevel::EXTI3>;
 });
 
-/// Interrupt binding for the capacitive touch panel INT line (`CTP_INT` / PE6).
+// Interrupt binding for the capacitive touch panel INT line (`CTP_INT` / PE6).
 #[cfg(feature = "touch")]
 bind_interrupts!(pub struct TouchIrqs {
     EXTI6 => exti::InterruptHandler<interrupt::typelevel::EXTI6>;

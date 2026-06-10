@@ -87,6 +87,13 @@ cargo run --bin oxivgl_widget_demo --features oxivgl
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
+With `touch`, input is interrupt-driven: a dedicated task sleeps on the
+`CTP_INT` EXTI line (PE6) and only polls the I2C controller while a contact
+is in progress. Samples feed a standard timer-mode LVGL pointer indev
+(`src/oxivgl/indev.rs`); press/release edges are logged on RTT both at the
+board level (`oxivgl touch down/up`) and when LVGL consumes them
+(`oxivgl indev -> LVGL press/release`).
+
 Optional: point `LVGL_SRC_DIR` at Riverdi's vendored tree when building:
 
 ```bash
