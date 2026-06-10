@@ -1,0 +1,60 @@
+[package]
+edition = "2024"
+name = "embassy-gen4-rp2350-70ct-clb-examples"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+description = "Examples for the 4D Systems gen4-RP2350-70CT-CLB 7.0\" display module (RP2350B)"
+
+[dependencies]
+# gen4-RP2350-70CT-CLB uses an RP2350B (QFN-80, 48 GPIO) with 16MB QSPI flash
+# and 8MB QSPI PSRAM (APS6404L on QMI CS1 / GPIO0).
+embassy-rp = { version = "0.10.0", path = "../../embassy-rp", features = ["defmt", "unstable-pac", "time-driver", "critical-section-impl", "rp235xb", "binary-info"] }
+embassy-sync = { version = "0.8.0", path = "../../embassy-sync", features = ["defmt"] }
+embassy-executor = { version = "0.10.0", path = "../../embassy-executor", features = ["platform-cortex-m", "executor-thread", "defmt"] }
+embassy-time = { version = "0.5.1", path = "../../embassy-time", features = ["defmt", "defmt-timestamp-uptime"] }
+embassy-futures = { version = "0.1.2", path = "../../embassy-futures" }
+
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+fixed = "1.23.1"
+
+cortex-m = { version = "0.7.6", features = ["inline-asm"] }
+cortex-m-rt = "0.7.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+static_cell = "2"
+
+# oxivgl — safe Rust bindings over C LVGL v9.5 (vendored alongside the RVT50 example)
+oxivgl = { version = "0.1.2", default-features = false, optional = true }
+oxivgl-sys = { version = "0.1.2", default-features = false, optional = true }
+embedded-alloc = { version = "0.6.0", features = ["llff"], optional = true }
+
+[features]
+default = []
+oxivgl = ["dep:oxivgl", "dep:oxivgl-sys", "dep:embedded-alloc"]
+# Enable the FT5446 capacitive touch input (CT / CT-CLB variants).
+touch = []
+
+[[bin]]
+name = "hello_world"
+
+[[bin]]
+name = "oxivgl_widget_demo"
+required-features = ["oxivgl"]
+
+[profile.release]
+debug = 2
+
+# Align oxivgl's embassy crates with this example's path dependencies.
+# The oxivgl crates are vendored once in the RVT50 example and shared here.
+[patch.crates-io]
+embassy-time = { path = "../../embassy-time" }
+embassy-sync = { path = "../../embassy-sync" }
+oxivgl = { path = "../rvt50hqsnwc00-b/vendor/oxivgl" }
+oxivgl-sys = { path = "../rvt50hqsnwc00-b/vendor/oxivgl-sys" }
+
+[package.metadata.embassy]
+build = [
+  { target = "thumbv8m.main-none-eabihf", artifact-dir = "out/examples/gen4-rp2350-70ct-clb" }
+]
