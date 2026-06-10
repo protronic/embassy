@@ -64,6 +64,9 @@ async fn main(spawner: Spawner) -> ! {
     spawner.spawn(unwrap!(heartbeat_info_task()));
 
     #[cfg(feature = "touch")]
+    spawner.spawn(unwrap!(touch_info_task()));
+
+    #[cfg(feature = "touch")]
     {
         let rvt50_board::DisplayResources { ltdc, i2c, touch_int: _ } =
             rvt50_board::init_display(p).await;
@@ -86,6 +89,38 @@ async fn heartbeat_info_task() -> ! {
     loop {
         info!("oxivgl widget demo heartbeat");
         Timer::after_secs(5).await;
+    }
+}
+
+#[cfg(feature = "touch")]
+#[embassy_executor::task]
+async fn touch_info_task() -> ! {
+    use core::sync::atomic::Ordering;
+
+    use embassy_rvt50hqsnwc00_b_examples::oxivgl::touch_dbg;
+
+    loop {
+        let pressed = touch_dbg::PRESSED.load(Ordering::Relaxed);
+        let i2c_ok = touch_dbg::I2C_OK.load(Ordering::Relaxed);
+        let raw = touch_dbg::RAW_STATUS.load(Ordering::Relaxed);
+        let x = touch_dbg::X.load(Ordering::Relaxed);
+        let y = touch_dbg::Y.load(Ordering::Relaxed);
+        let active = touch_dbg::ACTIVE_OBJ.load(Ordering::Relaxed);
+        let hit_btn = touch_dbg::HIT_BTN.load(Ordering::Relaxed);
+        let events = touch_dbg::EVENT_COUNT.load(Ordering::Relaxed);
+
+        info!(
+            "oxivgl touch dbg i2c_ok={} raw=0x{:02x} pressed={} x={} y={} active_obj={:08x} layout_hit={} lvgl_events={}",
+            i2c_ok,
+            raw,
+            pressed,
+            x,
+            y,
+            active,
+            hit_btn,
+            events
+        );
+        Timer::after_secs(2).await;
     }
 }
 

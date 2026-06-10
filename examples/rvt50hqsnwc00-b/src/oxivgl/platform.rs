@@ -17,6 +17,8 @@ use crate::oxivgl::display::{
 };
 #[cfg(feature = "touch")]
 use crate::oxivgl::indev::{TouchInput, TouchSample};
+#[cfg(feature = "touch")]
+use crate::oxivgl::touch_dbg;
 use crate::oxivgl::widget_view::WidgetView;
 use crate::rvt50_board::DISPLAY_WIDTH;
 
@@ -77,6 +79,14 @@ impl TouchPoller {
             pressed: t.pressed,
         };
 
+        touch_dbg::publish_touch(
+            sample.x,
+            sample.y,
+            sample.pressed,
+            t.i2c_ok,
+            t.raw_status,
+        );
+
         if t.pressed && !self.was_pressed {
             info!(
                 "oxivgl touch down x={} y={} raw=0x{:02x}",
@@ -91,10 +101,18 @@ impl TouchPoller {
 }
 
 #[cfg(feature = "touch")]
-fn pump_touch(driver: &LvglDriver, touch: &TouchInput, poller: &mut TouchPoller) {
-    touch.publish(poller.poll());
+fn pump_touch(
+    driver: &LvglDriver,
+    touch: &TouchInput,
+    poller: &mut TouchPoller,
+    view: &WidgetView,
+) {
+    let sample = poller.poll();
+    let hit_btn = view.find_button_at(sample.x, sample.y);
+    touch.publish(sample);
     driver.timer_handler();
     touch.sync_read();
+    touch.log_debug(sample, hit_btn.map(|(idx, _)| idx));
 }
 
 // ---------------------------------------------------------------------------
@@ -139,10 +157,16 @@ async fn lvgl_present_batch(
 
     for _ in 0..PRESENT_LVGL_TICKS {
         #[cfg(feature = "touch")]
-        touch.publish(poller.poll());
+        {
+            let sample = poller.poll();
+            let hit_btn = view.find_button_at(sample.x, sample.y);
+            touch.publish(sample);
+            driver.timer_handler();
+            touch.sync_read();
+            touch.log_debug(sample, hit_btn.map(|(idx, _)| idx));
+        }
+        #[cfg(not(feature = "touch"))]
         driver.timer_handler();
-        #[cfg(feature = "touch")]
-        touch.sync_read();
         Timer::after(Duration::from_millis(LVGL_TICK_MS)).await;
     }
 
@@ -212,7 +236,7 @@ pub async fn run_widget_demo(
         Timer::at(next_present).await;
 
         #[cfg(feature = "touch")]
-        pump_touch(&driver, &touch, &mut poller);
+        pump_touch(&driver, &touch, &mut poller, view);
         #[cfg(not(feature = "touch"))]
         driver.timer_handler();
 

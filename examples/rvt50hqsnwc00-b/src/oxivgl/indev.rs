@@ -6,14 +6,16 @@ use core::ptr;
 
 use defmt::info;
 use oxivgl_sys::{
-    lv_display_get_screen_prev, lv_indev_create, lv_indev_data_t, lv_indev_enable, lv_indev_get_display,
-    lv_indev_get_read_cb, lv_indev_read, lv_indev_set_display, lv_indev_set_mode, lv_indev_set_read_cb,
-    lv_indev_set_type, lv_indev_t, lv_indev_mode_t_LV_INDEV_MODE_EVENT,
-    lv_indev_state_t_LV_INDEV_STATE_PRESSED, lv_indev_state_t_LV_INDEV_STATE_RELEASED,
-    lv_indev_type_t_LV_INDEV_TYPE_POINTER, lv_timer_pause, lv_indev_get_read_timer,
+    lv_display_get_screen_prev, lv_indev_create, lv_indev_data_t, lv_indev_enable, lv_indev_get_active_obj,
+    lv_indev_get_display, lv_indev_get_point, lv_indev_get_read_cb, lv_indev_get_state, lv_indev_read,
+    lv_indev_set_display, lv_indev_set_mode, lv_indev_set_read_cb, lv_indev_set_type, lv_indev_t,
+    lv_indev_mode_t_LV_INDEV_MODE_EVENT, lv_indev_state_t_LV_INDEV_STATE_PRESSED,
+    lv_indev_state_t_LV_INDEV_STATE_RELEASED, lv_indev_type_t_LV_INDEV_TYPE_POINTER, lv_point_t,
+    lv_timer_pause, lv_indev_get_read_timer,
 };
 
 use crate::oxivgl::display::lvgl_display;
+use crate::oxivgl::touch_dbg;
 
 /// Latest touch sample written by the UI task before [`TouchInput::sync_read`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -105,6 +107,43 @@ impl TouchInput {
     pub fn pump(&self, sample: TouchSample) {
         self.publish(sample);
         self.sync_read();
+    }
+
+    /// Log LVGL pointer indev state and update [`touch_dbg`] atomics.
+    ///
+    /// `hit_btn` is the scene-button index whose layout bounds contain the
+    /// sample (if any) — compare with `lv_indev_get_active_obj()` to see whether
+    /// LVGL agrees with manual hit-testing.
+    pub fn log_debug(&self, sample: TouchSample, hit_btn: Option<usize>) {
+        assert!(self.registered, "TouchInput::register() was not called");
+        // SAFETY: UI task only; set in `register`.
+        unsafe {
+            let indev = POINTER_INDEV;
+            if indev.is_null() {
+                return;
+            }
+
+            let active = lv_indev_get_active_obj();
+            let state = lv_indev_get_state(indev);
+            let mut pt = lv_point_t {
+                x: 0,
+                y: 0,
+            };
+            lv_indev_get_point(indev, &mut pt);
+
+            touch_dbg::publish_indev(active, hit_btn);
+
+            if sample.pressed {
+                info!(
+                    "oxivgl indev pressed state={} pt=({},{}) active_obj={:08x} layout_hit={:?}",
+                    state,
+                    pt.x,
+                    pt.y,
+                    active as u32,
+                    hit_btn
+                );
+            }
+        }
     }
 }
 

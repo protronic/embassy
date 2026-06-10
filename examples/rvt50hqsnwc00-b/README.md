@@ -87,6 +87,24 @@ cargo run --bin oxivgl_widget_demo --features oxivgl
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
+With `touch`, RTT logs include:
+
+- `oxivgl touch down/up` — raw I2C coordinates
+- `oxivgl indev pressed` — LVGL pointer state vs layout hit-test index
+- `oxivgl widget event` — bubbled `PRESSED` / `CLICKED` on scene buttons
+- `oxivgl touch dbg` (every 2 s) — `i2c_ok`, `active_obj`, `layout_hit`, `lvgl_events`
+
+### OxivGL host demo (SDL, no hardware)
+
+Same protronic lighting-scene UI on a PC — useful to confirm widget events work before debugging board touch:
+
+```bash
+cd examples/oxivgl-host
+cargo run
+```
+
+See `examples/oxivgl-host/README.md` (requires SDL2 dev libraries).
+
 Optional: point `LVGL_SRC_DIR` at Riverdi's vendored tree when building:
 
 ```bash
