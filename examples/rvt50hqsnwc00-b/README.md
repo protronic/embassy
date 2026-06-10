@@ -87,6 +87,10 @@ cargo run --bin oxivgl_widget_demo --features oxivgl
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
+Touch input uses the same LVGL **TIMER-mode** pointer indev path as the SDL host
+demo (`examples/oxivgl-host`): publish the latest I2C sample, then call
+`timer_handler()` so LVGL reads it during `lv_timer_handler()`.
+
 With `touch`, RTT logs include:
 
 - `oxivgl touch down/up` — raw I2C coordinates

@@ -1,4 +1,8 @@
 //! STM32U5 + Embassy LTDC platform glue for OxivGL.
+//!
+//! The touch render loop mirrors [`examples/oxivgl-host`]: publish the latest
+//! sample, then call `timer_handler()` so LVGL's TIMER-mode pointer indev reads
+//! it (same mechanism as the SDL mouse indev on the host).
 
 extern crate alloc;
 
@@ -23,14 +27,10 @@ use crate::oxivgl::widget_view::WidgetView;
 use crate::rvt50_board::DISPLAY_WIDTH;
 
 const LVGL_TICK_MS: u64 = LV_DEF_REFR_PERIOD as u64 / 4;
-/// LTDC refresh cadence (~30 fps).
-const PRESENT_PERIOD_MS: u64 = 33;
-/// Touch sample cadence. Matches the rlvgl touch demos and avoids missing
-/// short presses when the controller does not emit a separate release edge.
-#[cfg(feature = "touch")]
-const TOUCH_POLL_MS: u64 = 5;
-/// Extra LVGL timer passes per LTDC present to keep animations smooth.
-const PRESENT_LVGL_TICKS: usize = 3;
+/// LVGL timer passes per frame — matches `run_app` / `examples/oxivgl-host`.
+const TICKS_PER_FRAME: usize = 4;
+/// LTDC refresh cadence (~30 fps, aligned with `LV_DEF_REFR_PERIOD`).
+const PRESENT_PERIOD_MS: u64 = LV_DEF_REFR_PERIOD as u64;
 
 /// OxivGL stripe buffer dimensions (lines × width × 2 bytes).
 pub const COLOR_BUF_LINES: usize = 20;
@@ -101,18 +101,13 @@ impl TouchPoller {
 }
 
 #[cfg(feature = "touch")]
-fn pump_touch(
-    driver: &LvglDriver,
-    touch: &TouchInput,
-    poller: &mut TouchPoller,
-    view: &WidgetView,
-) {
+fn publish_touch_sample(touch: &TouchInput, poller: &mut TouchPoller, view: &WidgetView) {
     let sample = poller.poll();
-    let hit_btn = view.find_button_at(sample.x, sample.y);
     touch.publish(sample);
-    driver.timer_handler();
-    touch.sync_read();
-    touch.log_debug(sample, hit_btn.map(|(idx, _)| idx));
+    if sample.pressed {
+        let hit_btn = view.find_button_at(sample.x, sample.y);
+        touch.log_debug(sample, hit_btn.map(|(idx, _)| idx));
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -138,40 +133,23 @@ async fn present_to_ltdc(ltdc: &mut Ltdc<'static, peripherals::LTDC, ltdc::Rgb56
 }
 
 // ---------------------------------------------------------------------------
-// LVGL tick batch
+// Shared LVGL tick batch (host + board)
 // ---------------------------------------------------------------------------
 
-/// Copy the front buffer, run PRESENT_LVGL_TICKS LVGL timer passes (each with
-/// a touch sample in EVENT mode), then present the result to LTDC.
-///
-/// Touch is sampled **before** `timer_handler` and fed into LVGL **after** so
-/// that `prev_scr` refresh is settled before new press events are dispatched.
-async fn lvgl_present_batch(
+/// One simulator-style frame: optional touch publish, then `TICKS_PER_FRAME`
+/// passes of `lv_timer_handler()`.
+async fn lvgl_tick_batch(
     driver: &LvglDriver,
-    view: &mut WidgetView,
-    ltdc: &mut Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>,
     #[cfg(feature = "touch")] touch: &TouchInput,
     #[cfg(feature = "touch")] poller: &mut TouchPoller,
+    #[cfg(feature = "touch")] view: &WidgetView,
 ) {
-    sync_back_from_front();
-
-    for _ in 0..PRESENT_LVGL_TICKS {
+    for _ in 0..TICKS_PER_FRAME {
         #[cfg(feature = "touch")]
-        {
-            let sample = poller.poll();
-            let hit_btn = view.find_button_at(sample.x, sample.y);
-            touch.publish(sample);
-            driver.timer_handler();
-            touch.sync_read();
-            touch.log_debug(sample, hit_btn.map(|(idx, _)| idx));
-        }
-        #[cfg(not(feature = "touch"))]
+        publish_touch_sample(touch, poller, view);
         driver.timer_handler();
         Timer::after(Duration::from_millis(LVGL_TICK_MS)).await;
     }
-
-    let _ = view.update();
-    present_to_ltdc(ltdc).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,9 +159,8 @@ async fn lvgl_present_batch(
 /// Run the OxivGL widget demo.
 ///
 /// With the `touch` feature: `i2c` is the blocking I2C bus to the touch
-/// controller. Touch is polled at a small fixed cadence so press/release
-/// transitions are delivered to LVGL even when the controller interrupt line
-/// does not produce a distinct edge for every state change.
+/// controller. Touch samples are published before each `timer_handler()` call,
+/// matching the SDL mouse path used by `examples/oxivgl-host`.
 pub async fn run_widget_demo(
     mut ltdc: Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>,
     bufs: &'static mut LvglBuffers<{ LVGL_BUF_BYTES }>,
@@ -223,28 +200,25 @@ pub async fn run_widget_demo(
 
     // Initial flush: settle the display before entering the main loop.
     #[cfg(feature = "touch")]
-    lvgl_present_batch(&driver, view, &mut ltdc, &touch, &mut poller).await;
+    lvgl_tick_batch(&driver, &touch, &mut poller, view).await;
     #[cfg(not(feature = "touch"))]
-    lvgl_present_batch(&driver, view, &mut ltdc).await;
+    lvgl_tick_batch(&driver).await;
+    sync_back_from_front();
+    present_to_ltdc(&mut ltdc).await;
 
     let mut next_present = Instant::now() + Duration::from_millis(PRESENT_PERIOD_MS);
 
     loop {
-        #[cfg(feature = "touch")]
-        Timer::after(Duration::from_millis(TOUCH_POLL_MS)).await;
-        #[cfg(not(feature = "touch"))]
-        Timer::at(next_present).await;
+        let _ = view.update();
 
         #[cfg(feature = "touch")]
-        pump_touch(&driver, &touch, &mut poller, view);
+        lvgl_tick_batch(&driver, &touch, &mut poller, view).await;
         #[cfg(not(feature = "touch"))]
-        driver.timer_handler();
+        lvgl_tick_batch(&driver).await;
 
         if Instant::now() >= next_present {
-            #[cfg(feature = "touch")]
-            lvgl_present_batch(&driver, view, &mut ltdc, &touch, &mut poller).await;
-            #[cfg(not(feature = "touch"))]
-            lvgl_present_batch(&driver, view, &mut ltdc).await;
+            sync_back_from_front();
+            present_to_ltdc(&mut ltdc).await;
             next_present = Instant::now() + Duration::from_millis(PRESENT_PERIOD_MS);
         }
     }

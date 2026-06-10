@@ -32,7 +32,7 @@ pub fn publish_touch(x: i32, y: i32, pressed: bool, i2c_ok: bool, raw_status: u8
     RAW_STATUS.store(raw_status, Ordering::Relaxed);
 }
 
-/// Store LVGL indev feedback after [`super::indev::TouchInput::sync_read`].
+/// Store LVGL indev feedback after a `timer_handler()` pass with touch active.
 pub fn publish_indev(active_obj: *mut oxivgl_sys::lv_obj_t, hit_btn: Option<usize>) {
     ACTIVE_OBJ.store(active_obj as u32, Ordering::Relaxed);
     HIT_BTN.store(hit_btn.map(|i| i as i32).unwrap_or(-1), Ordering::Relaxed);

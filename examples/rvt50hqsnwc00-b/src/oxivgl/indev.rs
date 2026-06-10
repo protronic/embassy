@@ -7,17 +7,16 @@ use core::ptr;
 use defmt::info;
 use oxivgl_sys::{
     lv_display_get_screen_prev, lv_indev_create, lv_indev_data_t, lv_indev_enable, lv_indev_get_active_obj,
-    lv_indev_get_display, lv_indev_get_point, lv_indev_get_read_cb, lv_indev_get_state, lv_indev_read,
+    lv_indev_get_display, lv_indev_get_point, lv_indev_get_read_cb, lv_indev_get_state,
     lv_indev_set_display, lv_indev_set_mode, lv_indev_set_read_cb, lv_indev_set_type, lv_indev_t,
-    lv_indev_mode_t_LV_INDEV_MODE_EVENT, lv_indev_state_t_LV_INDEV_STATE_PRESSED,
+    lv_indev_mode_t_LV_INDEV_MODE_TIMER, lv_indev_state_t_LV_INDEV_STATE_PRESSED,
     lv_indev_state_t_LV_INDEV_STATE_RELEASED, lv_indev_type_t_LV_INDEV_TYPE_POINTER, lv_point_t,
-    lv_timer_pause, lv_indev_get_read_timer,
 };
 
 use crate::oxivgl::display::lvgl_display;
 use crate::oxivgl::touch_dbg;
 
-/// Latest touch sample written by the UI task before [`TouchInput::sync_read`].
+/// Latest touch sample written by the UI task before `timer_handler()`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TouchSample {
     /// Horizontal coordinate in display pixels.
@@ -59,12 +58,11 @@ impl TouchInput {
             lv_indev_set_display(indev, disp);
             lv_indev_set_read_cb(indev, Some(pointer_read_cb));
             lv_indev_enable(indev, true);
-            // Only [`sync_read`] feeds samples — avoids racing the internal read timer.
-            lv_indev_set_mode(indev, lv_indev_mode_t_LV_INDEV_MODE_EVENT);
-            let read_timer = lv_indev_get_read_timer(indev);
-            if !read_timer.is_null() {
-                lv_timer_pause(read_timer);
-            }
+            // TIMER mode — same as the SDL mouse indev in `examples/oxivgl-host`.
+            // Publish the latest I2C sample via [`publish`] before each
+            // `timer_handler()`; LVGL calls [`pointer_read_cb`] from its indev
+            // read timer during `lv_timer_handler()`.
+            lv_indev_set_mode(indev, lv_indev_mode_t_LV_INDEV_MODE_TIMER);
 
             let linked_disp = lv_indev_get_display(indev);
             let prev_scr = lv_display_get_screen_prev(disp);
@@ -89,24 +87,6 @@ impl TouchInput {
         unsafe {
             TOUCH_SAMPLE = sample;
         }
-    }
-
-    /// Feed the published sample into LVGL.
-    ///
-    /// Call **after** `LvglDriver::timer_handler()` so refresh/screen state is settled
-    /// (LVGL blocks input while `disp->prev_scr` is active during refresh).
-    pub fn sync_read(&self) {
-        assert!(self.registered, "TouchInput::register() was not called");
-        // SAFETY: UI task only; set in `register`.
-        unsafe {
-            read_pointer_indev();
-        }
-    }
-
-    /// Publish a sample and read it into LVGL immediately (used during present batches).
-    pub fn pump(&self, sample: TouchSample) {
-        self.publish(sample);
-        self.sync_read();
     }
 
     /// Log LVGL pointer indev state and update [`touch_dbg`] atomics.
@@ -144,20 +124,6 @@ impl TouchInput {
                 );
             }
         }
-    }
-}
-
-/// Feed the latest sample into LVGL (called from [`TouchInput::sync_read`]).
-unsafe fn read_pointer_indev() {
-    // SAFETY: UI task only; set in `register`.
-    let indev = unsafe { POINTER_INDEV };
-    if indev.is_null() {
-        return;
-    }
-
-    // SAFETY: `indev` is a valid pointer returned by `lv_indev_create`.
-    unsafe {
-        lv_indev_read(indev);
     }
 }
 

@@ -27,6 +27,8 @@ use crate::widget_view::WidgetView;
 const DISPLAY_WIDTH: i32 = 800;
 const DISPLAY_HEIGHT: i32 = 480;
 const LVGL_TICK_MS: u64 = LV_DEF_REFR_PERIOD as u64 / 4;
+/// Matches `oxivgl::run_app` and the RVT50 `platform` loop.
+const TICKS_PER_FRAME: usize = 4;
 
 static VIEW: StaticCell<WidgetView> = StaticCell::new();
 
@@ -59,7 +61,7 @@ async fn main(_spawner: Spawner) {
 
     loop {
         let _ = view.update();
-        for _ in 0..4 {
+        for _ in 0..TICKS_PER_FRAME {
             driver.timer_handler();
             Timer::after(Duration::from_millis(LVGL_TICK_MS)).await;
         }

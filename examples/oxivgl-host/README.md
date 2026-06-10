@@ -29,11 +29,15 @@ Click scene buttons in the SDL window. Terminal output shows:
 | Board (`oxivgl_widget_demo`) | Host (this crate) |
 |------------------------------|-------------------|
 | LTDC RGB565 flush | SDL window |
-| I2C capacitive touch via `TouchInput` | SDL mouse indev (built into OxivGL) |
+| I2C touch via `TouchInput` (TIMER mode) | SDL mouse indev (TIMER mode) |
 | `defmt` RTT logging | `log` / stderr |
 | `touch_dbg` heartbeat task | Event lines printed directly |
 
+Both targets use the same render cadence: `view.update()`, then four
+`timer_handler()` passes per frame. On the board, `TouchInput::publish()` feeds
+the I2C sample immediately before each tick — the same slot where SDL injects
+mouse coordinates on the host.
+
 If clicks work here but not on the RVT50, the widget tree and event wiring are
-fine — focus on touch sampling, coordinate mapping, and indev timing on the
-board. If clicks fail here too, inspect `WidgetView` flags (`CLICKABLE`,
-`EVENT_BUBBLE`) and event registration.
+fine — focus on I2C sampling and coordinate mapping. If clicks fail here too,
+inspect `WidgetView` flags (`CLICKABLE`, `EVENT_BUBBLE`) and event registration.
