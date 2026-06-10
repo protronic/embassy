@@ -5,15 +5,15 @@ extern crate alloc;
 use embassy_stm32::ltdc::{self, Ltdc, LtdcLayer, LtdcLayerConfig};
 use embassy_stm32::peripherals;
 use embassy_time::{Duration, Instant, Timer};
-use oxivgl::display::{LvglBuffers, DISPLAY_READY};
+use oxivgl::display::{DISPLAY_READY, LvglBuffers};
 use oxivgl::driver::LvglDriver;
-use oxivgl::view::{register_view_events, View};
+use oxivgl::view::{View, register_view_events};
 use oxivgl::widgets::{Obj, Screen};
 use oxivgl_sys::LV_DEF_REFR_PERIOD;
 use static_cell::StaticCell;
 
 use crate::oxivgl::display::{
-    front_framebuffer, prefill_background, present_framebuffer, sync_back_from_front, LtdcDisplay,
+    LtdcDisplay, front_framebuffer, prefill_background, present_framebuffer, sync_back_from_front,
 };
 #[cfg(feature = "touch")]
 use crate::oxivgl::indev::{TouchInput, TouchSample};
@@ -43,40 +43,50 @@ static VIEW: StaticCell<WidgetView> = StaticCell::new();
 /// Reads the I2C touch panel and tracks press/release transitions.
 #[cfg(feature = "touch")]
 struct TouchPoller {
-    i2c: embassy_stm32::i2c::I2c<
-        'static,
-        embassy_stm32::mode::Blocking,
-        embassy_stm32::i2c::Master,
-    >,
+    i2c: embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Blocking, embassy_stm32::i2c::Master>,
     was_pressed: bool,
+    last_x: i32,
+    last_y: i32,
 }
 
 #[cfg(feature = "touch")]
 impl TouchPoller {
-    fn new(
-        i2c: embassy_stm32::i2c::I2c<
-            'static,
-            embassy_stm32::mode::Blocking,
-            embassy_stm32::i2c::Master,
-        >,
-    ) -> Self {
-        Self { i2c, was_pressed: false }
+    fn new(i2c: embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Blocking, embassy_stm32::i2c::Master>) -> Self {
+        Self {
+            i2c,
+            was_pressed: false,
+            last_x: 0,
+            last_y: 0,
+        }
     }
 
     /// Read the current touch state from I2C and log transitions.
     fn poll(&mut self) -> TouchSample {
         use defmt::info;
         let t = crate::rvt50_board::read_touch(&mut self.i2c);
+
+        if t.pressed {
+            self.last_x = t.x as i32;
+            self.last_y = t.y as i32;
+        }
+        // Idle reads park at the panel edge; keep releases on the last contact
+        // point so LVGL can finish click hit-testing on the pressed widget.
+        let sample = TouchSample {
+            x: self.last_x,
+            y: self.last_y,
+            pressed: t.pressed,
+        };
+
         if t.pressed && !self.was_pressed {
             info!(
                 "oxivgl touch down x={} y={} raw=0x{:02x}",
-                t.x, t.y, t.raw_status
+                sample.x, sample.y, t.raw_status
             );
         } else if !t.pressed && self.was_pressed {
-            info!("oxivgl touch up");
+            info!("oxivgl touch up x={} y={}", sample.x, sample.y);
         }
         self.was_pressed = t.pressed;
-        TouchSample { x: t.x as i32, y: t.y as i32, pressed: t.pressed }
+        sample
     }
 }
 
@@ -162,11 +172,7 @@ pub async fn run_widget_demo(
     init_ltdc_layer(&mut ltdc).await;
 
     let driver = LvglDriver::init(DISPLAY_WIDTH as i32, crate::rvt50_board::DISPLAY_HEIGHT as i32);
-    let _display = LtdcDisplay::init(
-        DISPLAY_WIDTH as i32,
-        crate::rvt50_board::DISPLAY_HEIGHT as i32,
-        bufs,
-    );
+    let _display = LtdcDisplay::init(DISPLAY_WIDTH as i32, crate::rvt50_board::DISPLAY_HEIGHT as i32, bufs);
 
     DISPLAY_READY.wait().await;
     prefill_background();
