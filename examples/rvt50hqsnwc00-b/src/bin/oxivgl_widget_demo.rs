@@ -108,5 +108,5 @@ async fn ui_touch_task(
     >,
     bufs: &'static mut LvglBuffers<{ LVGL_BUF_BYTES }>,
 ) -> ! {
-    platform::run_widget_demo(ltdc, bufs, Some(i2c)).await
+    platform::run_widget_demo(ltdc, bufs, i2c).await
 }
