@@ -1,12 +1,13 @@
 //! Board support for the 4D Systems **gen4-RP2350-70CT-CLB** intelligent display.
 //!
 //! - **MCU**: Raspberry Pi RP2350B
-//! - **Panel**: 7.0" 800×480 RGB565 (landscape)
+//! - **Panel**: 7.0" 800×480 RGB565 parallel RGB (`GEN4_RP2350_RGB`)
 //! - **Touch**: FocalTech FT5446 (capacitive), I2C1
 //! - **PSRAM**: APS6404L 8 MiB on QMI CS1 / GPIO0
 //!
-//! Auxiliary pin assignments follow the Pico SDK `gen4_rp2350_*ct` board headers
-//! (backlight, panel reset, touch controller).
+//! Pin assignments follow the Pico SDK board file `board/gen4_rp2350_70ct.h`
+//! (CLB variants use the same GPIO map). RGB scan-out pins are owned by
+//! Graphics4D when linked; Embassy only drives backlight and touch.
 
 use defmt::info;
 use embassy_executor::Spawner;
@@ -16,7 +17,7 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::gpio::{Input, Pull};
 #[cfg(feature = "touch")]
 use embassy_rp::i2c::{Blocking, Config as I2cConfig, I2c};
-use embassy_rp::peripherals::{self as peripherals, PIN_17, PIN_37, PWM_SLICE0};
+use embassy_rp::peripherals::{self as peripherals, PIN_17, PWM_SLICE0};
 #[cfg(feature = "touch")]
 use embassy_rp::peripherals::PIN_47;
 use embassy_rp::psram::{self, Psram};
@@ -25,6 +26,26 @@ use embassy_rp::qmi_cs1::QmiCs1;
 use embassy_rp::{Peri, Peripherals};
 
 use embassy_time::{Duration, Timer};
+
+/// Pin map from `board/gen4_rp2350_70ct.h` (Pico SDK / Workshop5).
+pub mod pins {
+    pub const LCD_BACKLIGHT: u8 = 17;
+    pub const LCD_DE: u8 = 18;
+    pub const LCD_VSYNC: u8 = 19;
+    pub const LCD_HSYNC: u8 = 20;
+    pub const LCD_PCLK: u8 = 21;
+    /// First of 16 consecutive RGB565 data lines (`LCD_DATA0_PIN` … `GPIO37`).
+    pub const LCD_DATA0: u8 = 22;
+    pub const LCD_DATA15: u8 = 37;
+    pub const LCD_CLK_FREQ_HZ: u32 = 25_000_000;
+
+    pub const TOUCH_INT: u8 = 38;
+    pub const TOUCH_SCL: u8 = 39;
+    pub const TOUCH_SDA: u8 = 46;
+    pub const TOUCH_RST: u8 = 47;
+
+    pub const PSRAM_CS: u8 = 0;
+}
 
 pub const DISPLAY_WIDTH: usize = 800;
 pub const DISPLAY_HEIGHT: usize = 480;
@@ -86,7 +107,6 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         PIN_0,
         PIN_17,
         PWM_SLICE0,
-        PIN_37,
         #[cfg(feature = "touch")]
         PIN_38,
         #[cfg(feature = "touch")]
@@ -133,11 +153,11 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         DISPLAY_HEIGHT
     );
 
-    reset_panel(PIN_37).await;
     init_backlight(PWM_SLICE0, PIN_17);
-    uinfo!("board init: panel reset + backlight PWM done");
+    uinfo!("board init: backlight PWM on GPIO{}", pins::LCD_BACKLIGHT);
 
-    // SAFETY: C shim may call into Graphics4D when `GEN4_GRAPHICS4D_SDK` is set.
+    // Panel reset and RGB PIO timing are handled inside Graphics4D::Initialize().
+    // SAFETY: C shim may call into Graphics4D when the SDK is linked.
     unsafe {
         gen4_lcd_init();
         gen4_lcd_backlight_enable();
@@ -149,7 +169,11 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         reset_touch(PIN_47).await;
         let i2c = I2c::new_blocking(I2C1, PIN_39, PIN_46, I2cConfig::default());
         let _touch_int = Input::new(PIN_38, Pull::Up);
-        info!("FT5446 touch on I2C1 (SCL=GPIO39, SDA=GPIO46)");
+        info!(
+            "FT5446 touch on I2C1 (SCL=GPIO{}, SDA=GPIO{})",
+            pins::TOUCH_SCL,
+            pins::TOUCH_SDA
+        );
         uinfo!("board init: FT5446 touch on I2C1");
         return Some(DisplayResources {
             psram,
@@ -168,15 +192,6 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
     }
 }
 
-async fn reset_panel(rst: Peri<'static, PIN_37>) {
-    let mut panel_reset = Output::new(rst, Level::Low);
-    panel_reset.set_low();
-    Timer::after(Duration::from_millis(20)).await;
-    panel_reset.set_high();
-    Timer::after(Duration::from_millis(120)).await;
-    info!("gen4 LCD reset sequence done");
-}
-
 #[cfg(feature = "touch")]
 async fn reset_touch(rst: Peri<'static, PIN_47>) {
     let mut touch_reset = Output::new(rst, Level::Low);
@@ -192,7 +207,7 @@ fn init_backlight(slice: Peri<'static, PWM_SLICE0>, pin: Peri<'static, PIN_17>) 
     pwm_config.compare_b = 220;
     let mut backlight = Pwm::new_output_b(slice, pin, pwm_config);
     backlight.set_duty_cycle(220).unwrap();
-    info!("backlight PWM enabled on GPIO17");
+    info!("backlight PWM enabled on GPIO{}", pins::LCD_BACKLIGHT);
 }
 
 #[derive(Clone, Copy, Default)]
@@ -234,9 +249,10 @@ pub fn read_touch(i2c: &mut I2c<'static, peripherals::I2C1, Blocking>) -> TouchP
     let mut x = u16::from(coords[0] & 0x0F) << 8 | u16::from(coords[1]);
     let mut y = u16::from(coords[2] & 0x0F) << 8 | u16::from(coords[3]);
 
-    // Workshop / Linux EDT driver defaults for 800×480 gen4 RGB panels.
-    x = DISPLAY_WIDTH as u16 - 1 - x.min(DISPLAY_WIDTH as u16 - 1);
-    y = DISPLAY_HEIGHT as u16 - 1 - y.min(DISPLAY_HEIGHT as u16 - 1);
+    // `LCD_TOUCH_SWAP_XY` in gen4_rp2350_70ct.h
+    core::mem::swap(&mut x, &mut y);
+    x = x.min(DISPLAY_WIDTH as u16 - 1);
+    y = y.min(DISPLAY_HEIGHT as u16 - 1);
 
     TouchPoint {
         x,

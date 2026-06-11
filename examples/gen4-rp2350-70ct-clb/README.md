@@ -77,25 +77,32 @@ The submodule may ship Embassy-specific files:
 | Full-screen framebuffers | 2 × 750 KiB | PSRAM base |
 | OxivGL / LVGL heap | 256 KiB | On-chip SRAM |
 
-## Pin map (auxiliary signals)
+## Pin map
+
+From Pico SDK `board/gen4_rp2350_70ct.h` (CLB uses the same map):
 
 | Function | GPIO | Notes |
 |----------|------|-------|
-| PSRAM CS1 | 0 | APS6404L (fixed on module) |
-| Backlight PWM | 17 | TIM PWM |
-| LCD reset | 37 | Active-low sequence in `gen4_board.rs` |
-| Touch INT | 38 | FT5446 interrupt (active low) |
+| PSRAM CS1 | 0 | APS6404L (QMI CS1) |
+| Backlight PWM | 17 | `LCD_BACKLIGHT` |
+| LCD DE | 18 | RGB data-enable |
+| LCD VSYNC | 19 | |
+| LCD HSYNC | 20 | |
+| LCD PCLK | 21 | 25 MHz (`LCD_CLK_FREQ`) |
+| LCD DATA0…15 | 22–37 | 16-bit RGB565 (B0 LSB on GPIO22) |
+| Touch INT | 38 | FT5446, active low |
 | Touch SCL | 39 | I2C1 |
 | Touch SDA | 46 | I2C1 |
-| Touch reset | 47 | Active-low |
+| Touch RST | 47 | Active-low reset in `gen4_board.rs` |
 
-RGB data / sync pins are wired internally on the module and are configured inside Graphics4D when linked.
+Panel reset and PIO RGB timing are handled by **Graphics4D** (`gfx.Initialize()`), not by Embassy.
+Touch coordinates use `LCD_TOUCH_SWAP_XY` from the board header.
 
 ## Troubleshooting
 
 - **Blank screen without Graphics4D**: expected with the default stub — run `git submodule update --init vendor/Graphics4D-pico` or set `GEN4_GRAPHICS4D_SDK`.
 - **PSRAM init fails**: verify you are targeting RP2350B (`rp235xb` feature) and APS6404L is populated.
-- **Touch coordinates inverted**: adjust the axis flip in `gen4_board::read_touch()` for your mounting orientation.
+- **Touch coordinates wrong**: the board file sets `LCD_TOUCH_SWAP_XY`; adjust `gen4_board::read_touch()` if your mounting differs.
 
 ## Resources
 
