@@ -1,12 +1,12 @@
-//! Async touch sampling task — feeds the UI task via an Embassy [`Watch`].
+//! Async touch sampling task — queues samples for the UI task via Embassy channel.
 //!
-//! I2C polling runs in its own task so blocking reads do not stall LVGL /
-//! LTDC. The UI task (sole LVGL owner) pulls the latest sample and calls
-//! [`super::indev::TouchInput::feed`].
+//! A `Watch` was lossy: the UI task often read a later idle sample `(799,0)` while
+//! the touch task had already logged `touch down (0,23)`. A bounded channel keeps
+//! press/release ordering intact.
 
 use defmt::info;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::watch::Watch;
+use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 
 use crate::oxivgl::indev::TouchSample;
@@ -33,31 +33,28 @@ impl From<TouchBoardSample> for TouchSample {
     }
 }
 
-/// Touch sample cadence (matches former in-task poller).
+/// Touch sample cadence.
 const TOUCH_POLL_MS: u64 = 5;
+/// Queue depth — short taps must survive until the UI task drains.
+const TOUCH_QUEUE_DEPTH: usize = 16;
 
-static TOUCH_WATCH: Watch<CriticalSectionRawMutex, TouchBoardSample, 1> = Watch::new();
+static TOUCH_CHAN: Channel<CriticalSectionRawMutex, TouchBoardSample, TOUCH_QUEUE_DEPTH> = Channel::new();
 
-/// Latest touch sample published by [`run_touch_poll_task`].
-pub fn latest() -> TouchSample {
-    TOUCH_WATCH
-        .anon_receiver()
-        .try_get()
-        .map(TouchSample::from)
-        .unwrap_or_default()
+/// Receiver for the UI task (sole LVGL owner).
+pub fn receiver(
+) -> embassy_sync::channel::Receiver<'static, CriticalSectionRawMutex, TouchBoardSample, TOUCH_QUEUE_DEPTH> {
+    TOUCH_CHAN.receiver()
 }
 
-/// Embassy task: poll the capacitive panel over I2C and publish samples.
+/// Embassy task: poll the capacitive panel over I2C and enqueue every sample.
 #[embassy_executor::task]
 pub async fn run_touch_poll_task(
     mut i2c: embassy_stm32::i2c::I2c<'static, embassy_stm32::mode::Blocking, embassy_stm32::i2c::Master>,
 ) -> ! {
-    let sender = TOUCH_WATCH.sender();
+    let sender = TOUCH_CHAN.sender();
     let mut was_pressed = false;
     let mut last_x = 0i32;
     let mut last_y = 0i32;
-
-    sender.send(TouchBoardSample::default());
 
     loop {
         let t = rvt50_board::read_touch(&mut i2c);
@@ -93,7 +90,7 @@ pub async fn run_touch_poll_task(
         }
         was_pressed = t.pressed;
 
-        sender.send(sample);
+        sender.send(sample).await;
         Timer::after(Duration::from_millis(TOUCH_POLL_MS)).await;
     }
 }

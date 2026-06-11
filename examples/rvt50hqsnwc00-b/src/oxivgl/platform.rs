@@ -1,10 +1,8 @@
 //! STM32U5 + Embassy LTDC platform glue for OxivGL.
 //!
 //! **Two tasks (touch builds):**
-//! - [`super::touch_feed::run_touch_poll_task`] — I2C sampling → Embassy `Watch`
-//! - `run_widget_demo` (this module) — sole LVGL/LTDC owner
-//!
-//! Display refresh: sync front → back, LVGL ticks, swap to LTDC.
+//! - [`super::touch_feed::run_touch_poll_task`] — I2C → channel queue
+//! - `run_widget_demo` — sole LVGL/LTDC owner; drains every queued sample
 
 extern crate alloc;
 
@@ -22,50 +20,46 @@ use crate::oxivgl::display::{
     LtdcDisplay, front_framebuffer, prefill_background, present_framebuffer, sync_back_from_front,
 };
 #[cfg(feature = "touch")]
-use crate::oxivgl::indev::TouchInput;
+use crate::oxivgl::indev::{TouchInput, TouchSample};
 #[cfg(feature = "touch")]
-use crate::oxivgl::touch_feed;
+use crate::oxivgl::touch_feed::{self, TouchBoardSample};
 use crate::oxivgl::widget_view::WidgetView;
 use crate::rvt50_board::DISPLAY_WIDTH;
 
 const LVGL_TICK_MS: u64 = LV_DEF_REFR_PERIOD as u64 / 4;
-/// LTDC refresh cadence (~30 fps).
 const PRESENT_PERIOD_MS: u64 = 33;
-/// UI loop cadence between full LTDC presents (touch samples come from `Watch`).
 #[cfg(feature = "touch")]
 const UI_TICK_MS: u64 = 5;
-/// LVGL timer passes per LTDC present.
 const PRESENT_LVGL_TICKS: usize = 4;
 
-/// OxivGL stripe buffer dimensions (lines × width × 2 bytes).
 pub const COLOR_BUF_LINES: usize = 20;
 pub const LVGL_BUF_BYTES: usize = crate::rvt50_board::DISPLAY_WIDTH * COLOR_BUF_LINES * 2;
 
 static VIEW: StaticCell<WidgetView> = StaticCell::new();
 
-// ---------------------------------------------------------------------------
-// Touch → LVGL (UI task only)
-// ---------------------------------------------------------------------------
-
 #[cfg(feature = "touch")]
-fn feed_touch_from_watch(
+fn drain_touch_queue(
+    rx: &mut embassy_sync::channel::Receiver<
+        'static,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        TouchBoardSample,
+        16,
+    >,
     driver: &LvglDriver,
     touch: &TouchInput,
     view: &WidgetView,
 ) {
-    let sample = touch_feed::latest();
-    let hit_btn = if sample.pressed {
-        view.find_button_at(sample.x, sample.y)
-            .map(|(idx, _)| idx)
-    } else {
-        None
-    };
-    touch.feed(driver, sample, hit_btn);
+    while let Ok(board) = rx.try_receive() {
+        let sample = TouchSample::from(board);
+        let hit_btn = if sample.pressed {
+            view.find_button_at(sample.x, sample.y)
+                .map(|(idx, _)| idx)
+        } else {
+            None
+        };
+        touch.feed(driver, sample, hit_btn);
+    }
 }
-
-// ---------------------------------------------------------------------------
-// LTDC helpers
-// ---------------------------------------------------------------------------
 
 async fn init_ltdc_layer(ltdc: &mut Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>) {
     let layer_config = LtdcLayerConfig {
@@ -85,23 +79,23 @@ async fn present_to_ltdc(ltdc: &mut Ltdc<'static, peripherals::LTDC, ltdc::Rgb56
     let _ = ltdc.reload().await;
 }
 
-// ---------------------------------------------------------------------------
-// LVGL present batch
-// ---------------------------------------------------------------------------
-
-/// Copy front → back, run LVGL timer passes, then swap the back buffer to LTDC.
 async fn lvgl_present_batch(
     driver: &LvglDriver,
     view: &mut WidgetView,
     ltdc: &mut Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>,
+    #[cfg(feature = "touch")] touch_rx: &mut embassy_sync::channel::Receiver<
+        'static,
+        embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex,
+        TouchBoardSample,
+        16,
+    >,
     #[cfg(feature = "touch")] touch: &TouchInput,
 ) {
     sync_back_from_front();
 
     for _ in 0..PRESENT_LVGL_TICKS {
         #[cfg(feature = "touch")]
-        feed_touch_from_watch(driver, touch, view);
-        #[cfg(not(feature = "touch"))]
+        drain_touch_queue(touch_rx, driver, touch, view);
         driver.timer_handler();
         Timer::after(Duration::from_millis(LVGL_TICK_MS)).await;
     }
@@ -110,14 +104,7 @@ async fn lvgl_present_batch(
     present_to_ltdc(ltdc).await;
 }
 
-// ---------------------------------------------------------------------------
-// Public entry point
-// ---------------------------------------------------------------------------
-
 /// Run the OxivGL widget demo (LVGL + LTDC UI task).
-///
-/// With `touch`, spawn [`touch_feed::run_touch_poll_task`] separately; this
-/// task reads the latest sample from the Embassy `Watch` before each LVGL tick.
 pub async fn run_widget_demo(
     mut ltdc: Ltdc<'static, peripherals::LTDC, ltdc::Rgb565>,
     bufs: &'static mut LvglBuffers<{ LVGL_BUF_BYTES }>,
@@ -147,9 +134,11 @@ pub async fn run_widget_demo(
 
     #[cfg(feature = "touch")]
     let touch = TouchInput::register();
+    #[cfg(feature = "touch")]
+    let mut touch_rx = touch_feed::receiver();
 
     #[cfg(feature = "touch")]
-    lvgl_present_batch(&driver, view, &mut ltdc, &touch).await;
+    lvgl_present_batch(&driver, view, &mut ltdc, &mut touch_rx, &touch).await;
     #[cfg(not(feature = "touch"))]
     lvgl_present_batch(&driver, view, &mut ltdc).await;
 
@@ -162,13 +151,17 @@ pub async fn run_widget_demo(
         Timer::at(next_present).await;
 
         #[cfg(feature = "touch")]
-        feed_touch_from_watch(&driver, &touch, view);
+        {
+            drain_touch_queue(&mut touch_rx, &driver, &touch, view);
+            // Keep LVGL alive between touch edges.
+            driver.timer_handler();
+        }
         #[cfg(not(feature = "touch"))]
         driver.timer_handler();
 
         if Instant::now() >= next_present {
             #[cfg(feature = "touch")]
-            lvgl_present_batch(&driver, view, &mut ltdc, &touch).await;
+            lvgl_present_batch(&driver, view, &mut ltdc, &mut touch_rx, &touch).await;
             #[cfg(not(feature = "touch"))]
             lvgl_present_batch(&driver, view, &mut ltdc).await;
             next_present = Instant::now() + Duration::from_millis(PRESENT_PERIOD_MS);
