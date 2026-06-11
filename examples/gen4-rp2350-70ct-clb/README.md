@@ -45,22 +45,35 @@ The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** 
 
 **Optional Graphics4D:** `vendor/graphics4d-rp2350/` should contain the prebuilt `libgraphics4d_rp2350.a` + headers. That archive is **not in git yet**.
 
-### Self-hosted worker (recommended)
+### Build worker (cloud agent or CI)
 
-Use a **GitHub Actions self-hosted runner** on your Linux box (CachyOS/Arch with `pico-sdk` + Graphics4D-pico access):
+**From Cursor Cloud / this repo** — no separate PC runner needed if you set one secret:
+
+1. GitHub → `protronic/embassy` → Settings → Secrets → Actions → **`GRAPHICS4D_PICO_TOKEN`**  
+   (PAT with `repo` read on `protronic/Graphics4D-pico`)
+
+2. In Cursor, add the same token to the cloud agent environment as `GRAPHICS4D_PICO_TOKEN`.
+
+3. Build + push from the agent:
+
+```bash
+cd examples/gen4-rp2350-70ct-clb
+GRAPHICS4D_PICO_TOKEN=ghp_... ./scripts/operate-graphics4d-worker.sh local --push
+```
+
+Or after the workflow is on `main`:
+
+```bash
+./scripts/operate-graphics4d-worker.sh remote --runner cloud --wait --branch cursor/gen4-rp2350-70ct-clb-36d2
+./scripts/operate-graphics4d-worker.sh fetch   # download .a from last run
+```
+
+**Self-hosted runner** (optional, uses local `pico-sdk` path instead of cloning in CI):
 
 ```bash
 ./scripts/setup-graphics4d-runner.sh https://github.com/protronic/embassy
+# Actions → “Vendor Graphics4D lib” → runner_type: self-hosted
 ```
-
-Then: **Actions → “Vendor Graphics4D lib” → Run workflow** (branch `cursor/gen4-rp2350-70ct-clb-36d2`).
-
-Repo settings:
-- Runner label: `graphics4d`
-- Variables: `PICO_SDK_PATH`, `GEN4_GRAPHICS4D_SDK` (path to your Graphics4D-pico clone)
-- Secret (optional): `GRAPHICS4D_PICO_TOKEN` — PAT to clone Graphics4D-pico if not on disk
-
-The workflow runs `scripts/graphics4d-worker-build.sh`, uploads the `.a` as an artifact, and can commit + push.
 
 ### Manual build (same machine)
 

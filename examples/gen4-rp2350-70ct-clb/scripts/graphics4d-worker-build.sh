@@ -83,10 +83,12 @@ echo
 echo "=== verify ==="
 bash "${SCRIPT_DIR}/check-graphics4d.sh"
 
-echo
-echo "=== cargo check (Graphics4D linked) ==="
-cd "${CRATE_DIR}"
-cargo check --bin oxivgl_widget_demo --features oxivgl,touch
+if [[ "${SKIP_CARGO_CHECK:-0}" != "1" ]]; then
+    echo
+    echo "=== cargo check (Graphics4D linked) ==="
+    cd "${CRATE_DIR}"
+    cargo check --bin oxivgl_widget_demo --features oxivgl,touch
+fi
 
 if [[ "${PUSH}" == "1" ]]; then
     echo
