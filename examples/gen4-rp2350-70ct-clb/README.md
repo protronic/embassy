@@ -67,23 +67,33 @@ panel: Graphics4D linked — RGB scanout active
 
 > **Note:** `vendor/Graphics4D-pico/` is gitignored. If the GitHub repo does not exist yet, export the Workshop5 Graphics4D tree from Windows and set `GEN4_GRAPHICS4D_SDK` on Linux (see below).
 
-### Workshop5 / local SDK override (Linux + Windows export)
+### Workshop5 — `libgraphics4d_rp2350.a` not found?
 
-Workshop5 runs on Windows. Copy (or git-push) the Graphics4D SDK tree so it contains:
-
-```text
-graphics4d-rp2350/
-  include/Graphics4D.h
-  lib/libgraphics4d_rp2350.a
-```
-
-Then on Linux:
+Workshop5 often ships **only headers** in Graphics4D-pico (`src/Graphics4D.h`), not a ready-made `.a`. That is normal.
 
 ```bash
-export GEN4_GRAPHICS4D_SDK=/path/to/graphics4d-rp2350
+./scripts/inspect-graphics4d-pico.sh    # what is in your tree?
+```
+
+**A) `src/*.cpp` present** — build on Linux:
+
+```bash
+export PICO_SDK_PATH=~/pico/pico-sdk
+./scripts/build-graphics4d-lib.sh
+```
+
+**B) only `.h`, no sources** — on Windows, compile any Workshop5 gen4-RP2350 project, then:
+
+```powershell
+powershell -File scripts\find-graphics4d-lib.ps1
+```
+
+Copy the found archive to `vendor/Graphics4D-pico/lib/libgraphics4d_rp2350.a`, then on Linux:
+
+```bash
 ./scripts/check-graphics4d.sh
 cargo build --bin oxivgl_widget_demo --features oxivgl,touch
-# flash the new ELF — a running board keeps the old stub firmware until reflashed
+# reflash — old firmware stays stub until you flash again
 ```
 
 If Graphics4D was built against the Pico SDK, also set `PICO_SDK_PATH`.
