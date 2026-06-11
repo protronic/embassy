@@ -47,15 +47,44 @@ cd examples/gen4-rp2350-70ct-clb
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-The script clones [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico) (override with `GRAPHICS4D_PICO_URL` for SSH or a fork). The build script looks for `include/Graphics4D.h` and `lib/libgraphics4d_rp2350.a` inside that directory. Without it, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub (blank panel).
-
-> **Note:** `vendor/Graphics4D-pico/` is gitignored in this crate. If the remote repo does not exist yet, create/push `protronic/Graphics4D-pico` first, or point `GEN4_GRAPHICS4D_SDK` at a local Workshop5 install.
-
-### Workshop5 / local SDK override
+The script clones [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico) (override with `GRAPHICS4D_PICO_URL` for SSH or a fork). Check before building:
 
 ```bash
-export GEN4_GRAPHICS4D_SDK=/path/to/workshop5/graphics4d-rp2350
-cargo run --bin oxivgl_widget_demo --features oxivgl,touch
+./scripts/check-graphics4d.sh
+```
+
+The build script needs **`include/Graphics4D.h`** and **`lib/libgraphics4d_rp2350.a`** under the SDK root. Without them, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub — USB log shows:
+
+```text
+panel: Graphics4D not found — ...
+panel_presents=N   # counter rises, but panel stays blank
+```
+
+After linking Graphics4D, rebuild, reflash, and confirm:
+
+```text
+panel: Graphics4D linked — RGB scanout active
+```
+
+> **Note:** `vendor/Graphics4D-pico/` is gitignored. If the GitHub repo does not exist yet, export the Workshop5 Graphics4D tree from Windows and set `GEN4_GRAPHICS4D_SDK` on Linux (see below).
+
+### Workshop5 / local SDK override (Linux + Windows export)
+
+Workshop5 runs on Windows. Copy (or git-push) the Graphics4D SDK tree so it contains:
+
+```text
+graphics4d-rp2350/
+  include/Graphics4D.h
+  lib/libgraphics4d_rp2350.a
+```
+
+Then on Linux:
+
+```bash
+export GEN4_GRAPHICS4D_SDK=/path/to/graphics4d-rp2350
+./scripts/check-graphics4d.sh
+cargo build --bin oxivgl_widget_demo --features oxivgl,touch
+# flash the new ELF — a running board keeps the old stub firmware until reflashed
 ```
 
 If Graphics4D was built against the Pico SDK, also set `PICO_SDK_PATH`.

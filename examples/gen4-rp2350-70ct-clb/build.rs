@@ -110,14 +110,53 @@ fn find_static_lib(sdk: &Path) -> Option<(PathBuf, &'static str)> {
     None
 }
 
+fn diagnose_missing_sdk(manifest_dir: &Path) {
+    if let Ok(sdk) = env::var("GEN4_GRAPHICS4D_SDK") {
+        let path = PathBuf::from(&sdk);
+        if !path.is_dir() {
+            println!("cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} is not a directory");
+            return;
+        }
+        if graphics4d_header(&path).is_none() {
+            println!("cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} — Graphics4D.h not found");
+        }
+        if find_static_lib(&path).is_none() {
+            println!("cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} — libgraphics4d_rp2350.a not found");
+        }
+        return;
+    }
+
+    let vendor = manifest_dir.join("vendor/Graphics4D-pico");
+    if vendor.is_dir() {
+        if graphics4d_header(&vendor).is_none() {
+            println!(
+                "cargo:warning={} exists but Graphics4D.h is missing",
+                vendor.display()
+            );
+        }
+        if find_static_lib(&vendor).is_none() {
+            println!(
+                "cargo:warning={} exists but libgraphics4d_rp2350.a is missing",
+                vendor.display()
+            );
+        }
+    } else {
+        println!(
+            "cargo:warning={} not present — run scripts/init-graphics4d-pico.sh or set GEN4_GRAPHICS4D_SDK",
+            vendor.display()
+        );
+    }
+}
+
 fn build_display_driver(manifest_dir: &Path) {
     if let Some(sdk) = resolve_graphics4d_sdk(manifest_dir) {
         link_graphics4d(&sdk);
         build_gfx4d_glue(&sdk);
     } else {
         println!(
-            "cargo:warning=Graphics4D not found — run scripts/init-graphics4d-pico.sh (or set GEN4_GRAPHICS4D_SDK). RGB scanout is stubbed."
+            "cargo:warning=Graphics4D not linked — RGB scanout STUB active (blank panel). Run scripts/check-graphics4d.sh"
         );
+        diagnose_missing_sdk(manifest_dir);
         build_stub_glue();
     }
 }
