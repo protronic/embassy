@@ -27,11 +27,14 @@ SDK="$(cd "${SDK}" && pwd)"
 LIB_SRC="${SDK}/lib/libgraphics4d_rp2350.a"
 [[ -f "${LIB_SRC}" ]] || die "${LIB_SRC} missing — build first or checkout prebuilt tag libgraphics4d-rp2350-*"
 
+bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${LIB_SRC}"
+
 echo "=== install from ${SDK} -> ${DEST} ==="
 rm -rf "${DEST}"
 mkdir -p "${DEST}/lib" "${DEST}/include"
 
 cp -f "${LIB_SRC}" "${DEST}/lib/libgraphics4d_rp2350.a"
+bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${DEST}/lib/libgraphics4d_rp2350.a"
 
 while IFS= read -r -d '' hdr; do
     rel="${hdr#${SDK}/}"

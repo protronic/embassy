@@ -26,7 +26,10 @@ fn main() {
     println!("cargo:rerun-if-changed=memory.x");
     println!("cargo:rerun-if-changed=c/display_stub.c");
     println!("cargo:rerun-if-changed=c/display_gfx4d.cpp");
+    println!("cargo:rerun-if-changed=c/graphics4d_scanout.h");
+    println!("cargo:rerun-if-changed=c/pico_sdk_stubs.c");
     println!("cargo:rerun-if-changed=c/display.h");
+    println!("cargo:rerun-if-changed=scripts/filter-graphics4d-embassy-lib.sh");
     println!("cargo:rerun-if-env-changed=GEN4_GRAPHICS4D_SDK");
     println!(
         "cargo:rerun-if-changed={}",
@@ -37,7 +40,7 @@ fn main() {
         manifest_dir.join("vendor/Graphics4D-pico").display()
     );
 
-    build_display_driver(&manifest_dir);
+    build_display_driver(&manifest_dir, &out);
 
     println!("cargo:rustc-link-arg-bins=--nmagic");
     println!("cargo:rustc-link-arg-bins=-Tlink.x");
@@ -251,9 +254,9 @@ fn diagnose_missing_sdk(manifest_dir: &Path) {
     }
 }
 
-fn build_display_driver(manifest_dir: &Path) {
+fn build_display_driver(manifest_dir: &Path, out_dir: &Path) {
     if let Some(sdk) = resolve_graphics4d_sdk(manifest_dir) {
-        link_graphics4d(&sdk);
+        link_graphics4d(&sdk, out_dir);
         build_gfx4d_glue(&sdk);
     } else {
         println!(
@@ -264,15 +267,83 @@ fn build_display_driver(manifest_dir: &Path) {
     }
 }
 
-fn link_graphics4d(sdk: &Path) {
+/// Link newlib + libstdc++ for `thumbv8m.main-none-eabihf` (RP2350 / Cortex-M33 hard-float).
+fn link_arm_eabihf_toolchain(bin: &str) {
+    let Some(libstdcxx) = arm_none_eabi_lib("libstdc++.a") else {
+        println!("cargo:warning=arm-none-eabi libstdc++.a not found — Graphics4D C++ link may fail");
+        return;
+    };
+    if let Some(lib_dir) = libstdcxx.parent() {
+        println!("cargo:rustc-link-search=native={}", lib_dir.display());
+    }
+    if let Some(libgcc) = arm_none_eabi_lib("libgcc.a") {
+        if let Some(gcc_dir) = libgcc.parent() {
+            println!("cargo:rustc-link-search=native={}", gcc_dir.display());
+        }
+    }
+
+    for lib in ["stdc++", "c", "m", "gcc", "nosys"] {
+        println!("cargo:rustc-link-arg-bin={bin}=-l{lib}");
+    }
+}
+
+fn arm_none_eabi_lib(name: &str) -> Option<PathBuf> {
+    let out = std::process::Command::new("arm-none-eabi-gcc")
+        .args([
+            "-mcpu=cortex-m33",
+            "-mthumb",
+            "-mfloat-abi=hard",
+            "-mfpu=fpv5-sp-d16",
+            &format!("-print-file-name={name}"),
+        ])
+        .output()
+        .ok()?;
+    let path = String::from_utf8(out.stdout).ok()?;
+    let path = path.trim();
+    let path = PathBuf::from(path);
+    if path.is_file() {
+        return Some(path);
+    }
+    path.canonicalize().ok().filter(|p| p.is_file())
+}
+
+fn prepare_embassy_graphics4d_lib(sdk: &Path, out_dir: &Path) -> (PathBuf, String) {
     let (lib_dir, lib_name) = find_static_lib(sdk).expect("validated above");
+    let src_lib = lib_dir.join(format!("lib{lib_name}.a"));
+    let filtered = out_dir.join("libgraphics4d_rp2350_embassy.a");
+    let filter_script = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap())
+        .join("scripts/filter-graphics4d-embassy-lib.sh");
+
+    if filter_script.is_file() {
+        let ok = std::process::Command::new("bash")
+            .arg(&filter_script)
+            .arg(&src_lib)
+            .arg(&filtered)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if ok && filtered.is_file() {
+            println!(
+                "cargo:warning=Using Embassy-filtered Graphics4D archive ({})",
+                filtered.display()
+            );
+            return (out_dir.to_path_buf(), "graphics4d_rp2350_embassy".to_string());
+        }
+        println!("cargo:warning=Embassy filter failed — linking vendored archive as-is");
+    }
+
+    (lib_dir, lib_name.to_string())
+}
+
+fn link_graphics4d(sdk: &Path, out_dir: &Path) {
+    let (lib_dir, lib_name) = prepare_embassy_graphics4d_lib(sdk, out_dir);
+    let bin = "oxivgl_widget_demo";
 
     println!("cargo:rustc-cfg=gen4_graphics4d");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
-    println!("cargo:rustc-link-lib=static={lib_name}");
-    println!("cargo:rustc-link-lib=static=stdc++");
-    println!("cargo:rustc-link-lib=static=m");
-    println!("cargo:rustc-link-lib=static=c");
+    // Link into the firmware binary only — avoids embedding the whole .a in the Rust rlib.
+    println!("cargo:rustc-link-arg-bin={bin}=-l{lib_name}");
+    link_arm_eabihf_toolchain(bin);
     println!(
         "cargo:warning=Linking Graphics4D RGB scanout from {}",
         sdk.display()
@@ -327,6 +398,10 @@ fn build_gfx4d_glue(sdk: &Path) {
 
     // Workshop5 targets Cortex-M33 hard-float — match the Embassy target.
     build.compile("gen4_display");
+
+    cc::Build::new()
+        .file("c/pico_sdk_stubs.c")
+        .compile("gen4_pico_stubs");
 }
 
 fn build_stub_glue() {

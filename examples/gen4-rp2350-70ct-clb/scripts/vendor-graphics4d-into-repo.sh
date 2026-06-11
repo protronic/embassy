@@ -34,6 +34,9 @@ else
     bash "${SCRIPT_DIR}/install-graphics4d-from-sdk.sh"
 fi
 
+echo "=== validate (ARM-only, no host x86 objects) ==="
+bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${DEST}/lib/libgraphics4d_rp2350.a"
+
 echo "=== done ==="
 ls -lh "${DEST}/lib/libgraphics4d_rp2350.a"
 echo

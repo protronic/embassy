@@ -41,3 +41,7 @@ SECTIONS {
 
 PROVIDE(start_to_end = __end_block_addr - __start_block_addr);
 PROVIDE(end_to_start = __start_block_addr - __end_block_addr);
+
+/* Pico SDK / libgcc references when linking Graphics4D static lib */
+PROVIDE(__exidx_start = 0);
+PROVIDE(__exidx_end = 0);

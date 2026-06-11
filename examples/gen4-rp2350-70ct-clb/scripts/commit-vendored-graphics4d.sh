@@ -31,6 +31,7 @@ die() { echo "error: $*" >&2; exit 1; }
 
 [[ -f "${LIB}" ]] || die "${LIB} missing — run ./scripts/vendor-graphics4d-into-repo.sh first"
 [[ -f "${HDR}" ]] || die "${HDR} missing — vendor script should copy Graphics4D.h"
+bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${LIB}"
 
 echo "=== vendored Graphics4D ==="
 ls -lh "${LIB}"

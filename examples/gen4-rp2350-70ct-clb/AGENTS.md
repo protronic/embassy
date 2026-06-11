@@ -27,6 +27,39 @@ LVGL flush  →  PSRAM RGB565 (800×480)  →  gen4_lcd_present_rgb565()
 Glue code lives in `c/display_gfx4d.cpp` (Embassy repo). It requires a global
 `Graphics4D gfx` object linked from the static library.
 
+## Archive must be ARM-only (cloud agent gate)
+
+After building, **always** run:
+
+```bash
+./scripts/validate-graphics4d-lib.sh lib/libgraphics4d_rp2350.a
+```
+
+Every `.o` in the archive must be **ARM** (`readelf -h … | grep Machine:.*ARM`).
+**Reject** archives that still contain host objects (`bintool.cpp.o`, `elf2uf2.cpp.o`,
+`aes.c.o`, … — Machine: X86-64).
+
+Copy **only** the CMake target output:
+
+```text
+build-embassy-cmake/libgraphics4d_rp2350.a
+```
+
+Do **not** merge Workshop5 `build/` trees or host tool objects into the `.a`.
+
+Optional strip step (removes x86 if present):
+
+```bash
+./scripts/filter-graphics4d-arm-lib.sh lib/libgraphics4d_rp2350.a lib/libgraphics4d_rp2350_stripped.a
+./scripts/validate-graphics4d-lib.sh lib/libgraphics4d_rp2350_stripped.a
+```
+
+Embassy `build.rs` also runs `filter-graphics4d-embassy-lib.sh` at link time to drop
+Pico startup / USB stdio objects that clash with `link.x`.
+
+CMake must define `FB_IN_PSRAM` (see `cmake/graphics4d-lib/CMakeLists.txt`) so
+Graphics4D framebuffers do not overflow 512 KiB SRAM.
+
 ## Build output (success criteria)
 
 After a successful build, these must exist:

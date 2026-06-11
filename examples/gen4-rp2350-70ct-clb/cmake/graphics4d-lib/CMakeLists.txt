@@ -63,6 +63,7 @@ target_include_directories(graphics4d_rp2350 PUBLIC
 target_compile_definitions(graphics4d_rp2350 PUBLIC
     GEN4_RP2350_70CT
     GEN4_RP2350_RGB
+    FB_IN_PSRAM
 )
 target_link_libraries(graphics4d_rp2350
     pico_stdlib

@@ -80,6 +80,10 @@ echo "=== vendor into ${VENDOR_REL} ==="
 bash "${SCRIPT_DIR}/vendor-graphics4d-into-repo.sh"
 
 echo
+echo "=== validate static archive (cloud agent gate) ==="
+bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${CRATE_DIR}/vendor/graphics4d-rp2350/lib/libgraphics4d_rp2350.a"
+
+echo
 echo "=== verify ==="
 bash "${SCRIPT_DIR}/check-graphics4d.sh"
 

@@ -62,17 +62,44 @@ export GRAPHICS4D_SDK="${SDK}"
 
 copy_built_lib() {
     local build_dir="$1"
-    mapfile -t BUILT < <(
-        find "${build_dir}" -type f \( \
-            -name 'libgraphics4d_rp2350.a' -o \
-            -name 'libgraphics4d.a' -o \
-            -name 'libGraphics4D.a' \
-        \) 2>/dev/null | sort
-    )
-    [[ ${#BUILT[@]} -gt 0 ]] || return 1
-    cp -f "${BUILT[0]}" "${LIB_OUT}"
-    echo "Built ${LIB_OUT} (from ${BUILT[0]})"
-    return 0
+    local candidate
+
+    # Prefer the CMake target output at the build root — do NOT use find() across
+    # the tree (Workshop5 / Pico SDK trees may contain host x86_64 .a fragments).
+    for candidate in \
+        "${build_dir}/libgraphics4d_rp2350.a" \
+        "${build_dir}/libgraphics4d.a" \
+        "${build_dir}/libGraphics4D.a"
+    do
+        if [[ -f "${candidate}" ]]; then
+            cp -f "${candidate}" "${LIB_OUT}"
+            echo "Built ${LIB_OUT} (from ${candidate})"
+            bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${LIB_OUT}"
+            write_build_info "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+write_build_info() {
+    local cmake_out="$1"
+    local info="${SDK}/lib/BUILD_INFO.txt"
+    cat > "${info}" <<EOF
+built_utc=$(date -u +%Y-%m-%dT%H:%MZ)
+source=${SDK}
+cmake_output=${cmake_out}
+toolchain=${TOOLCHAIN}
+compiler=$(arm-none-eabi-gcc --version 2>/dev/null | head -1)
+cpu_flags=-mcpu=cortex-m33 -mthumb -mfloat-abi=hard -mfpu=fpv5-sp-d16
+board=${PICO_BOARD}
+platform=rp2350
+pico_rp2350a=0
+cmake_target=graphics4d_rp2350
+lib_sha256=$(sha256sum "${LIB_OUT}" | awk '{print $1}')
+validated_by=scripts/validate-graphics4d-lib.sh
+EOF
 }
 
 setup_workshop5_pico_import() {
@@ -182,6 +209,8 @@ try_manual_compile() {
     rm -f "${LIB_OUT}"
     arm-none-eabi-ar rcs "${LIB_OUT}" "${objs[@]}"
     echo "Built ${LIB_OUT} (${#objs[@]} objects)"
+    bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${LIB_OUT}"
+    write_build_info "${LIB_OUT}"
     return 0
 }
 

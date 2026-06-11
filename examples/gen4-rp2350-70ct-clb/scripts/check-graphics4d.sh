@@ -64,6 +64,13 @@ check_root() {
     local lib
     if lib="$(find_static_lib "${root}")"; then
         ok "static lib ${lib#${root}/}"
+        if bash "${SCRIPT_DIR}/validate-graphics4d-lib.sh" "${lib}"; then
+            ok "archive architecture (ARM-only)"
+        else
+            miss "archive architecture — mixed host x86_64 + ARM (rebuild with validate-graphics4d-lib.sh)"
+            hint "cloud agent: copy ONLY build-embassy-cmake/libgraphics4d_rp2350.a — see AGENTS.md"
+            return 1
+        fi
         [[ "${found_header}" -eq 1 ]]
         return
     fi

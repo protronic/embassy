@@ -1,6 +1,6 @@
 #include "display.h"
 
-#include "Graphics4D.h"
+#include "graphics4d_scanout.h"
 
 // Workshop5 projects expose a global `gfx` object.
 extern Graphics4D gfx;
