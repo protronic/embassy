@@ -50,11 +50,9 @@ if(NOT GRAPHICS4D_SOURCES)
     message(FATAL_ERROR "No C/C++ sources under ${GRAPHICS4D_SDK}/src after filtering")
 endif()
 
-message(STATUS "Graphics4D embassy lib: ${CMAKE_CURRENT_LIST_DIR}")
-message(STATUS "  SDK: ${GRAPHICS4D_SDK}")
-message(STATUS "  sources: ${CMAKE_CURRENT_LIST_DIR} -> ${CMAKE_CURRENT_LIST_DIR}")
+message(STATUS "Graphics4D embassy lib from ${GRAPHICS4D_SDK}")
 list(LENGTH GRAPHICS4D_SOURCES _n_src)
-message(STATUS "  compiling ${_n_src} source file(s)")
+message(STATUS "  compiling ${_n_src} source file(s) (FatFS/SDIO excluded)")
 
 add_library(graphics4d_rp2350 STATIC ${GRAPHICS4D_SOURCES})
 target_include_directories(graphics4d_rp2350 PUBLIC
