@@ -68,37 +68,48 @@ pub struct PsramFramebuffers {
 }
 
 impl PsramFramebuffers {
-    /// Reserve framebuffer(s) at the base of PSRAM.
-    ///
-    /// Graphics4D uses two plain RGB565 buffers; Embassy DPI uses one buffer
-    /// with per-row prefix words (see [`crate::dpi`]).
+    /// Reserve framebuffer(s) at the base of PSRAM (Embassy DPI path only).
     ///
     /// # Safety
     /// `psram` must be initialised and `base_address()` must stay valid.
+    #[cfg(not(gen4_graphics4d))]
     pub unsafe fn new(psram: &Psram<'_>) -> Option<Self> {
         let base = psram.base_address();
         let total = psram.size() as usize;
-        #[cfg(gen4_graphics4d)]
-        {
-            if total < FB_BYTES * 2 {
-                return None;
-            }
-            Some(Self {
-                back: base.cast::<u8>(),
-                front: base.wrapping_add(FB_BYTES).cast::<u8>(),
-                bytes: FB_BYTES,
-            })
+        if total < FB_BYTES {
+            return None;
         }
-        #[cfg(not(gen4_graphics4d))]
-        {
-            if total < FB_BYTES {
-                return None;
-            }
-            Some(Self {
-                back: base.cast::<u8>(),
-                bytes: FB_BYTES,
-            })
+        Some(Self {
+            back: base.cast::<u8>(),
+            bytes: FB_BYTES,
+        })
+    }
+
+    /// LVGL draw buffers in PSRAM after Graphics4D has claimed the low region.
+    ///
+    /// Graphics4D `Initialize()` sets up the QMI PSRAM heap at `0x1100_0000` and
+    /// allocates its own scan-out framestores there. Placing LVGL buffers at the
+    /// same base corrupts that heap and typically hard-faults during panel init.
+    ///
+    /// # Safety
+    /// `gen4_lcd_init()` / `gfx.Initialize()` must have returned successfully.
+    #[cfg(gen4_graphics4d)]
+    pub unsafe fn new_after_graphics4d() -> Option<Self> {
+        const PSRAM_BASE: usize = 0x1100_0000;
+        /// Room for Graphics4D TLSF heap + internal RGB/aux FBs + DMA bounce (~1.6 MiB).
+        const GFX4D_PSRAM_RESERVE: usize = 2 * 1024 * 1024;
+        const PSRAM_SIZE: usize = 8 * 1024 * 1024;
+
+        let fb_base = PSRAM_BASE + GFX4D_PSRAM_RESERVE;
+        if fb_base + FB_BYTES * 2 > PSRAM_BASE + PSRAM_SIZE {
+            return None;
         }
+        let back = fb_base as *mut u8;
+        Some(Self {
+            back,
+            front: back.add(FB_BYTES),
+            bytes: FB_BYTES,
+        })
     }
 }
 
@@ -128,6 +139,7 @@ pub struct DpiPeripherals {
 }
 
 pub struct DisplayResources {
+    #[cfg(not(gen4_graphics4d))]
     pub psram: Psram<'static>,
     pub framebuffers: PsramFramebuffers,
     #[cfg(not(gen4_graphics4d))]
@@ -148,9 +160,13 @@ pub fn log_panel_driver_status() {
 pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources> {
     let Peripherals {
         USB,
+        #[cfg(not(gen4_graphics4d))]
         QMI_CS1,
+        #[cfg(not(gen4_graphics4d))]
         PIN_0,
+        #[cfg(not(gen4_graphics4d))]
         PIN_17,
+        #[cfg(not(gen4_graphics4d))]
         PWM_SLICE0,
         #[cfg(not(gen4_graphics4d))]
         PIO0,
@@ -219,56 +235,64 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
     );
     uinfo!("board init: starting");
 
+    #[cfg(gen4_graphics4d)]
+    let framebuffers = {
+        // Graphics4D owns QMI/PSRAM setup and panel PIO. Do not call embassy Psram::new()
+        // first — double QMI programming is a common hard-fault source.
+        // SAFETY: C shim calls into the linked Graphics4D library.
+        unsafe {
+            gen4_lcd_init();
+            gen4_lcd_backlight_enable();
+        }
+        uinfo!("board init: gen4_lcd_init() returned (Graphics4D PSRAM + panel)");
+
+        // SAFETY: Graphics4D finished PSRAM/panel init.
+        let framebuffers = unsafe { PsramFramebuffers::new_after_graphics4d()? };
+        uinfo!(
+            "board init: LVGL framebuffers {}x{} RGB565 x2 @ PSRAM+2MiB ({} KiB each)",
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT,
+            FB_BYTES / 1024
+        );
+        info!(
+            "gen4 Graphics4D ready: LVGL framebuffers {}x{} RGB565 x2",
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT
+        );
+        framebuffers
+    };
+
+    #[cfg(not(gen4_graphics4d))]
     let psram = Psram::new(
         QmiCs1::new(QMI_CS1, PIN_0),
         psram::Config::aps6404l(),
     )
     .ok()?;
+    #[cfg(not(gen4_graphics4d))]
     uinfo!("board init: PSRAM OK ({} KiB)", psram.size() / 1024);
 
-    // SAFETY: PSRAM is mapped and sized by the driver.
-    let framebuffers = unsafe { PsramFramebuffers::new(&psram)? };
-    #[cfg(gen4_graphics4d)]
-    uinfo!(
-        "board init: framebuffers {}x{} RGB565 x2 ({} KiB each)",
-        DISPLAY_WIDTH,
-        DISPLAY_HEIGHT,
-        FB_BYTES / 1024
-    );
     #[cfg(not(gen4_graphics4d))]
-    uinfo!(
-        "board init: framebuffer {}x{} DPI ({} KiB)",
-        DISPLAY_WIDTH,
-        DISPLAY_HEIGHT,
-        FB_BYTES / 1024
-    );
-
-    info!(
-        "gen4 PSRAM ready: {} KiB, framebuffers {}x{} RGB565 x2",
-        psram.size() / 1024,
-        DISPLAY_WIDTH,
-        DISPLAY_HEIGHT
-    );
-
-    init_backlight(PWM_SLICE0, PIN_17);
-    uinfo!("board init: backlight PWM on GPIO{}", pins::LCD_BACKLIGHT);
-
-    #[cfg(gen4_graphics4d)]
-    {
-        // Panel reset and RGB PIO timing are handled inside Graphics4D::Initialize().
-        // SAFETY: C shim may call into Graphics4D when the SDK is linked.
-        unsafe {
-            gen4_lcd_init();
-            gen4_lcd_backlight_enable();
-        }
-        uinfo!("board init: gen4_lcd_init() returned");
-    }
-
-    #[cfg(not(gen4_graphics4d))]
-    {
+    let framebuffers = {
+        // SAFETY: PSRAM is mapped and sized by the driver.
+        let framebuffers = unsafe { PsramFramebuffers::new(&psram)? };
+        uinfo!(
+            "board init: framebuffer {}x{} DPI ({} KiB)",
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT,
+            FB_BYTES / 1024
+        );
+        info!(
+            "gen4 PSRAM ready: {} KiB, framebuffers {}x{} DPI",
+            psram.size() / 1024,
+            DISPLAY_WIDTH,
+            DISPLAY_HEIGHT
+        );
+        init_backlight(PWM_SLICE0, PIN_17);
+        uinfo!("board init: backlight PWM on GPIO{}", pins::LCD_BACKLIGHT);
         let _sync = park_sync_pins(PIN_20, PIN_19);
         uinfo!("board init: HSYNC/VSYNC parked (DE-only mode)");
-    }
+        framebuffers
+    };
 
     #[cfg(feature = "touch")]
     {
@@ -282,6 +306,7 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         );
         uinfo!("board init: FT5446 touch on I2C1");
         return Some(DisplayResources {
+            #[cfg(not(gen4_graphics4d))]
             psram,
             framebuffers,
             #[cfg(not(gen4_graphics4d))]
@@ -297,6 +322,7 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
     {
         uinfo!("board init: complete (no touch feature)");
         Some(DisplayResources {
+            #[cfg(not(gen4_graphics4d))]
             psram,
             framebuffers,
             #[cfg(not(gen4_graphics4d))]

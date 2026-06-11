@@ -41,3 +41,55 @@ STUB_USED void *_sbrk(ptrdiff_t incr) {
 }
 
 STUB_USED void _fini(void) {}
+
+// FatFS symbols referenced by Graphics4D.cpp (SD assets) — not used by OxivGL scan-out.
+typedef unsigned char BYTE;
+typedef unsigned int UINT;
+typedef char TCHAR;
+typedef int FRESULT;
+
+typedef struct {
+    void *fs;
+    void *file;
+    void *dir;
+    void *obj;
+} FIL;
+
+typedef struct {
+    BYTE dummy;
+} FATFS;
+
+STUB_USED FRESULT f_open(FIL *fp, const TCHAR *path, BYTE mode) {
+    (void)fp;
+    (void)path;
+    (void)mode;
+    return 1; /* FR_DISK_ERR */
+}
+
+STUB_USED FRESULT f_mount(FATFS *fs, const TCHAR *path, BYTE opt) {
+    (void)fs;
+    (void)path;
+    (void)opt;
+    return 1;
+}
+
+STUB_USED FRESULT f_read(FIL *fp, void *buff, UINT btr, UINT *br) {
+    (void)fp;
+    (void)buff;
+    (void)btr;
+    if (br) {
+        *br = 0;
+    }
+    return 1;
+}
+
+STUB_USED FRESULT f_lseek(FIL *fp, unsigned long ofs) {
+    (void)fp;
+    (void)ofs;
+    return 1;
+}
+
+STUB_USED int atexit(void (*func)(void)) {
+    (void)func;
+    return 0;
+}
