@@ -1,8 +1,8 @@
 [target.'cfg(all(target_arch = "arm", target_os = "none"))']
 # gen4-RP2350-70CT-CLB uses an RP2350B. Flash over SWD (FFC pins 18/19) with a
 # debug probe, or drag-and-drop a UF2 via the BOOTSEL USB-C bootloader.
-runner = "probe-rs run --chip RP235x"
-#runner = "picotool load -u -v -x -t elf"
+#runner = "probe-rs run --chip RP235x"
+runner = "picotool load -u -v -x -t elf"
 
 [build]
 target = "thumbv8m.main-none-eabihf"
