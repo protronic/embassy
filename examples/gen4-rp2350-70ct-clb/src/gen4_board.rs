@@ -22,8 +22,8 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::i2c::{Blocking, Config as I2cConfig, I2c};
 use embassy_rp::psram::{Config as PsramConfig, Psram};
 use embassy_rp::qmi_cs1::QmiCs1;
-use embassy_rp::{Peri, Peripherals, peripherals};
-#[cfg(feature = "touch")]
+use embassy_rp::usb::{Driver as UsbDriver, InterruptHandler as UsbInterruptHandler};
+use embassy_rp::{Peri, Peripherals, bind_interrupts, peripherals};
 use embassy_time::{Duration, Timer};
 
 /// Active pixels per line.
@@ -82,23 +82,76 @@ pub mod pins {
     pub const I2C0_SCL: u8 = 9;
 }
 
+bind_interrupts!(pub struct UsbIrqs {
+    USBCTRL_IRQ => UsbInterruptHandler<peripherals::USB>;
+});
+
 /// Initialize the RP2350 with the default clock tree (150 MHz `clk_sys`).
 pub fn init() -> Peripherals {
     embassy_rp::init(embassy_rp::config::Config::default())
+}
+
+/// Create the USB driver for the CDC-ACM debug logger (module USB-C port).
+pub fn usb_log_driver(usb: Peri<'static, peripherals::USB>) -> UsbDriver<'static, peripherals::USB> {
+    UsbDriver::new(usb, UsbIrqs)
+}
+
+/// Expose `log::info!`/`log::warn!`-style messages on the module's USB-C
+/// connector as a CDC-ACM serial port (e.g. `/dev/ttyACM0`, 115200 8N1).
+///
+/// Messages logged before the host opens the port are dropped, so the
+/// examples re-log key bring-up facts periodically.
+#[embassy_executor::task]
+pub async fn usb_logger_task(driver: UsbDriver<'static, peripherals::USB>) {
+    embassy_usb_logger::run!(2048, log::LevelFilter::Info, driver);
 }
 
 /// Map the on-module APS6404L PSRAM at `0x1100_0000` and return the driver.
 ///
 /// The 800×480 RGB565 framebuffer (~752 KiB plus row prefixes) does not fit
 /// in the 520 KiB of SRAM, so it is placed at the start of PSRAM.
-pub fn init_psram(
+///
+/// On failure this never returns: it keeps reporting the error on RTT and
+/// the USB logger (if running) instead of panicking invisibly.
+pub async fn init_psram(
     qmi_cs1: Peri<'static, peripherals::QMI_CS1>,
     cs_pin: Peri<'static, peripherals::PIN_0>,
 ) -> Psram<'static> {
-    let psram = Psram::new(QmiCs1::new(qmi_cs1, cs_pin), PsramConfig::aps6404l())
-        .expect("APS6404L PSRAM not found (is this a gen4-RP2350 module?)");
-    info!("PSRAM mapped: {} bytes at {:#x}", psram.size(), psram.base_address());
-    psram
+    match Psram::new(QmiCs1::new(qmi_cs1, cs_pin), PsramConfig::aps6404l()) {
+        Ok(psram) => {
+            info!("PSRAM mapped: {} bytes at {:#x}", psram.size(), psram.base_address());
+            log::info!("PSRAM mapped: {} bytes at {:p}", psram.size(), psram.base_address());
+            psram
+        }
+        Err(_) => loop {
+            defmt::error!("APS6404L PSRAM not found (is this a gen4-RP2350 module?)");
+            log::error!("APS6404L PSRAM not found (is this a gen4-RP2350 module?)");
+            Timer::after(Duration::from_secs(1)).await;
+        },
+    }
+}
+
+/// Write/read-back self-test on a PSRAM window (returns the first failing
+/// byte offset on error).
+///
+/// Spans more than the 16 KiB XIP cache so most read-backs really hit the
+/// PSRAM chip. Pick `offset`/`len` outside the framebuffer region.
+pub fn psram_self_test(psram: &Psram<'static>, offset: usize, len: usize) -> Result<(), usize> {
+    assert!(offset + len <= psram.size());
+    let base = psram.base_address().wrapping_add(offset);
+    // SAFETY: PSRAM is memory-mapped and the window is inside its size.
+    unsafe {
+        for i in 0..len {
+            core::ptr::write_volatile(base.add(i), (i as u8).wrapping_mul(31).wrapping_add(7));
+        }
+        for i in 0..len {
+            let expected = (i as u8).wrapping_mul(31).wrapping_add(7);
+            if core::ptr::read_volatile(base.add(i)) != expected {
+                return Err(i);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Turn the LCD backlight on (plain GPIO; the module dims via PWM if needed).

@@ -177,6 +177,7 @@ impl View for WidgetView {
                     label.text(&format!("{}%", v));
                 }
                 info!("oxivgl slider value {}", v);
+                log::info!("slider value {}", v);
                 return NavAction::None;
             }
         }
@@ -211,6 +212,7 @@ impl View for WidgetView {
                         label.text(&format!("{} clicks", self.clicks));
                     }
                     info!("oxivgl button click #{}", self.clicks);
+                    log::info!("button click #{}", self.clicks);
                 }
             }
             _ => {}

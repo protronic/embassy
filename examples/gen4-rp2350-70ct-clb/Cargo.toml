@@ -20,6 +20,7 @@ embassy-usb-logger = { version = "0.6.0", path = "../../embassy-usb-logger" }
 
 defmt = "1.0.1"
 defmt-rtt = "1.0.0"
+# Debug logging over the module's native USB-C (CDC-ACM serial)
 log = "0.4"
 fixed = "1.23.1"
 
@@ -41,6 +42,9 @@ touch = []
 
 [[bin]]
 name = "hello_world"
+
+[[bin]]
+name = "display_test"
 
 [[bin]]
 name = "oxivgl_widget_demo"

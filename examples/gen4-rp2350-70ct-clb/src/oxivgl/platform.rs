@@ -42,6 +42,7 @@ struct TouchPoller {
     was_pressed: bool,
     last_x: i32,
     last_y: i32,
+    i2c_errors: u32,
 }
 
 #[cfg(feature = "touch")]
@@ -52,6 +53,7 @@ impl TouchPoller {
             was_pressed: false,
             last_x: 0,
             last_y: 0,
+            i2c_errors: 0,
         }
     }
 
@@ -77,8 +79,17 @@ impl TouchPoller {
                 "oxivgl touch down x={} y={} points={}",
                 sample.x, sample.y, t.raw_status
             );
+            log::info!("touch down x={} y={} points={}", sample.x, sample.y, t.raw_status);
         } else if !t.pressed && self.was_pressed {
             info!("oxivgl touch up x={} y={}", sample.x, sample.y);
+            log::info!("touch up x={} y={}", sample.x, sample.y);
+        }
+        if !t.i2c_ok {
+            self.i2c_errors = self.i2c_errors.wrapping_add(1);
+            if self.i2c_errors % 1000 == 1 {
+                defmt::warn!("FT5446 I2C read failed ({} so far)", self.i2c_errors);
+                log::warn!("FT5446 I2C read failed ({} so far)", self.i2c_errors);
+            }
         }
         self.was_pressed = t.pressed;
         sample
@@ -103,18 +114,21 @@ pub async fn run_widget_demo(
     let _display = PsramDisplay::init(DISPLAY_WIDTH as i32, DISPLAY_HEIGHT as i32, bufs, fb);
 
     DISPLAY_READY.wait().await;
+    log::info!("LVGL display registered ({}x{})", DISPLAY_WIDTH, DISPLAY_HEIGHT);
 
     let view = VIEW.init(WidgetView::default());
     let screen = Screen::active().expect("LVGL screen must exist after display init");
     let container = Obj::from_raw_non_owning(screen.handle());
     if view.create(&container).is_err() {
         defmt::warn!("oxivgl widget create failed");
+        log::warn!("oxivgl widget create failed");
         loop {
             Timer::after(Duration::from_secs(60)).await;
         }
     }
     register_view_events(view);
     view.log_layout();
+    log::info!("oxivgl widget view created, entering UI loop");
 
     #[cfg(feature = "touch")]
     let touch = TouchInput::register();

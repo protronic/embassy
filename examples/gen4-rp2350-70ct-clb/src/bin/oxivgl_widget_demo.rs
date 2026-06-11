@@ -11,6 +11,10 @@
 //! **Requires nightly Rust** (see `rust-toolchain.toml` in this crate) and
 //! `arm-none-eabi-gcc` for the LVGL C sources.
 //!
+//! Debug output goes to RTT (defmt) **and** to the module's USB-C connector
+//! as a CDC-ACM serial port (`log` crate, e.g. `/dev/ttyACM0`): boot stages,
+//! periodic scan-out DMA/PIO statistics, LVGL flush counts, and touch events.
+//!
 //! ```bash
 //! cargo run --bin oxivgl_widget_demo --features oxivgl
 //! cargo run --bin oxivgl_widget_demo --features oxivgl,touch
@@ -19,6 +23,7 @@
 extern crate alloc;
 
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
@@ -53,6 +58,9 @@ static mut HEAP_MEM: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
 static mut LVGL_BUFS: LvglBuffers<{ LVGL_BUF_BYTES }> = LvglBuffers::new();
 static PSRAM: StaticCell<embassy_rp::psram::Psram<'static>> = StaticCell::new();
 
+/// Frames streamed so far (written by `scanout_task`, read by the heartbeat).
+static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
+
 fn init_heap() {
     // SAFETY: called once before any allocation.
     unsafe {
@@ -71,14 +79,23 @@ async fn main(spawner: Spawner) -> ! {
 
     let p = gen4_board::init();
 
+    // USB CDC logger first, so the boot stages below show up on the USB-C
+    // serial port (e.g. /dev/ttyACM0) as well as on RTT.
+    spawner.spawn(unwrap!(gen4_board::usb_logger_task(gen4_board::usb_log_driver(p.USB))));
+    log::info!("gen4-RP2350-70CT-CLB OxivGL widget demo booting");
+
     // Framebuffer lives at the start of the 8 MiB PSRAM.
-    let psram = PSRAM.init(gen4_board::init_psram(p.QMI_CS1, p.PIN_0));
+    let psram = PSRAM.init(gen4_board::init_psram(p.QMI_CS1, p.PIN_0).await);
     assert!(psram.size() >= dpi::FRAME_BYTES);
+    let psram_size = psram.size();
     let fb = psram.base_address();
+    // Color bars under the UI: if LVGL never flushes, the bars still show
+    // that the scan-out itself works.
     // SAFETY: PSRAM is mapped and at least FRAME_BYTES large.
     unsafe {
-        dpi::init_framebuffer(fb, rgb565(16, 32, 48));
+        dpi::fill_test_pattern(fb);
     }
+    log::info!("PSRAM ok: {} bytes, framebuffer at {:p}", psram_size, fb);
 
     // Panel control pins: backlight on, HSYNC/VSYNC parked (DE-only mode).
     let _backlight = gen4_board::init_backlight(p.PIN_17);
@@ -108,12 +125,18 @@ async fn main(spawner: Spawner) -> ! {
         pclk: p.PIN_35,
     };
     let dpi = Dpi::new(&mut common, sm0, frame_dma, lcd_pins, fb as u32);
+    log::info!(
+        "scan-out started: {}x{} @ {} Hz pclk",
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+        dpi::PCLK_HZ
+    );
 
     // SAFETY: static LVGL stripe buffers are only used from the UI task.
     let bufs = unsafe { &mut LVGL_BUFS };
 
     spawner.spawn(unwrap!(scanout_task(dpi)));
-    spawner.spawn(unwrap!(heartbeat_info_task()));
+    spawner.spawn(unwrap!(heartbeat_info_task(psram_size)));
 
     #[cfg(feature = "touch")]
     {
@@ -129,23 +152,57 @@ async fn main(spawner: Spawner) -> ! {
     }
 }
 
-fn rgb565(r: u8, g: u8, b: u8) -> u16 {
-    ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)
-}
-
-/// Stream the PSRAM framebuffer to the panel at a fixed cadence.
+/// Stream the PSRAM framebuffer to the panel at a fixed cadence, logging
+/// scan-out DMA/PIO statistics every ~5 s.
 #[embassy_executor::task]
 async fn scanout_task(mut dpi: Dpi<'static, PIO0, 0>) -> ! {
     loop {
         dpi.present().await;
+        let frame = FRAME_COUNT.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
+
+        if frame % 100 == 0 {
+            let s = dpi.stats();
+            info!(
+                "dpi frame={} busy={} read_offset={} remaining={} sm_pc={} fifo={} stalled={}",
+                frame, s.busy, s.read_offset, s.remaining_words, s.sm_pc, s.tx_fifo_level, s.tx_stalled
+            );
+            log::info!(
+                "dpi frame={} busy={} read_offset={} remaining={} sm_pc={} fifo={} stalled={}",
+                frame,
+                s.busy,
+                s.read_offset,
+                s.remaining_words,
+                s.sm_pc,
+                s.tx_fifo_level,
+                s.tx_stalled
+            );
+        }
+
         Timer::after(Duration::from_millis(FRAME_PERIOD_MS)).await;
     }
 }
 
+/// Re-log key bring-up facts periodically (USB hosts that attach late still
+/// see them) plus LVGL flush activity.
 #[embassy_executor::task]
-async fn heartbeat_info_task() -> ! {
+async fn heartbeat_info_task(psram_size: usize) -> ! {
     loop {
-        info!("oxivgl widget demo heartbeat");
+        let frames = FRAME_COUNT.load(Ordering::Relaxed);
+        let flushes = embassy_gen4_rp2350_70ct_clb_examples::oxivgl::display::flush_count();
+        info!(
+            "heartbeat: uptime={}s psram={} frames={} lvgl_flushes={}",
+            embassy_time::Instant::now().as_secs(),
+            psram_size,
+            frames,
+            flushes
+        );
+        log::info!(
+            "heartbeat: uptime={}s psram={}B frames={} lvgl_flushes={}",
+            embassy_time::Instant::now().as_secs(),
+            psram_size,
+            frames,
+            flushes
+        );
         Timer::after_secs(5).await;
     }
 }

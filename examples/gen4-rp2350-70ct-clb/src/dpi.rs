@@ -46,6 +46,29 @@ pub const FRAME_BYTES: usize = ROW_BYTES * DISPLAY_HEIGHT;
 /// Words streamed to the PIO per frame.
 pub const FRAME_WORDS: u32 = (ROW_WORDS * DISPLAY_HEIGHT) as u32;
 
+/// Debug snapshot of the scan-out DMA + PIO state (see [`Dpi::stats`]).
+///
+/// Healthy scan-out: `read_offset`/`remaining_words` advance between
+/// snapshots while a frame streams, `sm_pc` sits in the pixel loop or at the
+/// row-prefix stall, and `tx_fifo_level` is mostly non-zero. A permanently
+/// `busy` channel with a frozen `read_offset` points at PSRAM reads stalling;
+/// `tx_stalled = true` with `busy = false` is normal between frames.
+#[derive(Clone, Copy, Debug, defmt::Format)]
+pub struct DpiStats {
+    /// Frame DMA channel busy flag.
+    pub busy: bool,
+    /// Current DMA read position, in bytes from the framebuffer base.
+    pub read_offset: u32,
+    /// Words left in the current frame transfer.
+    pub remaining_words: u32,
+    /// PIO state machine program counter (instruction memory address).
+    pub sm_pc: u8,
+    /// TX FIFO fill level (0..8 with the joined FIFO).
+    pub tx_fifo_level: u8,
+    /// Sticky TX FIFO underrun/stall flag (cleared on read).
+    pub tx_stalled: bool,
+}
+
 /// The LCD interface pins (board-fixed GPIO18..GPIO35).
 pub struct LcdPins {
     pub d0: Peri<'static, peripherals::PIN_18>,
@@ -219,6 +242,19 @@ impl<'d, PIO: Instance, const SM: usize> Dpi<'d, PIO, SM> {
         regs.ctrl_trig().write_value(self.ctrl);
     }
 
+    /// Snapshot of the scan-out state for debug logging.
+    pub fn stats(&mut self) -> DpiStats {
+        let regs = self.dma.regs();
+        DpiStats {
+            busy: regs.ctrl_trig().read().busy(),
+            read_offset: regs.read_addr().read().wrapping_sub(self.fb_addr),
+            remaining_words: regs.trans_count().read().count(),
+            sm_pc: self.sm.get_addr(),
+            tx_fifo_level: self.sm.tx().level(),
+            tx_stalled: self.sm.tx().stalled(),
+        }
+    }
+
     /// Stop the scan-out (aborts the DMA stream and disables the SM).
     pub fn stop(&mut self) {
         pac::DMA
@@ -242,6 +278,43 @@ pub unsafe fn init_framebuffer(fb: *mut u8, fill_rgb565: u16) {
             // Prefix word content is discarded by the PIO (`out null, 32`).
             core::ptr::write_bytes(row_base, 0, ROW_PIXEL_OFFSET);
             for x in 0..DISPLAY_WIDTH {
+                let p = row_base.add(ROW_PIXEL_OFFSET + x * 2);
+                core::ptr::copy_nonoverlapping(px.as_ptr(), p, 2);
+            }
+        }
+    }
+}
+
+/// RGB565 color of the 8-bar test pattern at horizontal position `x`
+/// (white, yellow, cyan, green, magenta, red, blue, black).
+pub fn test_pattern_color(x: usize) -> u16 {
+    const BARS: [u16; 8] = [
+        0xFFFF, // white
+        0xFFE0, // yellow
+        0x07FF, // cyan
+        0x07E0, // green
+        0xF81F, // magenta
+        0xF800, // red
+        0x001F, // blue
+        0x0000, // black
+    ];
+    BARS[(x * BARS.len() / DISPLAY_WIDTH).min(BARS.len() - 1)]
+}
+
+/// Draw the 8-bar color test pattern into the framebuffer (and initialize
+/// the row prefix words). Useful to verify the scan-out and the RGB data
+/// pin mapping independently of any UI library.
+///
+/// # Safety
+/// `fb` must point at least `FRAME_BYTES` of writable memory.
+pub unsafe fn fill_test_pattern(fb: *mut u8) {
+    // SAFETY: caller guarantees the framebuffer region is valid.
+    unsafe {
+        for row in 0..DISPLAY_HEIGHT {
+            let row_base = fb.add(row * ROW_BYTES);
+            core::ptr::write_bytes(row_base, 0, ROW_PIXEL_OFFSET);
+            for x in 0..DISPLAY_WIDTH {
+                let px = test_pattern_color(x).to_le_bytes();
                 let p = row_base.add(ROW_PIXEL_OFFSET + x * 2);
                 core::ptr::copy_nonoverlapping(px.as_ptr(), p, 2);
             }

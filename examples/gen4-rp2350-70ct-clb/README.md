@@ -37,7 +37,8 @@ featuring an **OxivGL** (C LVGL v9.5) widget demo.
 
 ```bash
 cd examples/gen4-rp2350-70ct-clb
-cargo run --bin hello_world                                  # RTT + PSRAM check
+cargo run --bin hello_world                                  # RTT/USB log + PSRAM check
+cargo run --bin display_test                                 # color bars + scan-out stats
 cargo run --bin oxivgl_widget_demo --features oxivgl         # widget demo
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch   # + FT5446 touch
 ```
@@ -52,10 +53,53 @@ Flashing options:
 
 ## Available Examples
 
-- `hello_world.rs` - RTT logging plus APS6404L PSRAM bring-up check
+- `hello_world.rs` - RTT + USB serial logging plus APS6404L PSRAM self-test
+- `display_test.rs` - **Display bring-up test without any UI library**: color
+  bars + a moving column, PSRAM self-test, and scan-out statistics on the USB
+  serial port. Run this first if the panel stays dark.
 - `oxivgl_widget_demo.rs` - Multi-widget **OxivGL** demo (real C LVGL v9.5 via
   [oxivgl](https://github.com/emobotics-dev/oxivgl)): buttons with click
   counter, slider mirrored by a bar, switch, checkbox, and spinner
+
+## Debug Output over USB
+
+All examples expose a **CDC-ACM serial port on the module's USB-C connector**
+(no debug probe required) in addition to RTT/defmt:
+
+```bash
+# Linux: the module shows up as e.g. /dev/ttyACM0
+picocom /dev/ttyACM0       # or: minicom -D /dev/ttyACM0, screen /dev/ttyACM0
+```
+
+Logged information:
+
+- boot stages: PSRAM detection/size, framebuffer address, scan-out start
+- PSRAM write/read-back self-test result (`hello_world`, `display_test`)
+- periodic scan-out statistics: DMA `busy`, `read_offset`, remaining words,
+  PIO program counter, TX FIFO level/stall flag
+- LVGL flush counter and heartbeat (`oxivgl_widget_demo`)
+- touch down/up events and FT5446 I2C errors (`--features touch`)
+
+Messages logged before the host opens the port are dropped; key facts are
+re-logged periodically so a late `picocom` still sees them.
+
+## Troubleshooting a Dark / Blank Panel
+
+Flash `display_test` first and watch the USB serial output:
+
+| Symptom | Likely cause |
+|---------|--------------|
+| No USB serial port at all | Firmware not running — check power (use 2+ of the 5V FFC pins), try the BOOTSEL bootloader |
+| `PSRAM not found` repeated | Wrong module/PSRAM CS pin, QMI problem |
+| `PSRAM self-test FAILED` | PSRAM mapping/timing problem |
+| Stats advance but screen black, backlight off | `LCD_BACKLIGHT` (GPIO17) mapping wrong |
+| Backlight on, screen black, `read_offset` advancing | RGB data / DE / PCLK pin mapping wrong — see the note below and adjust `src/gen4_board.rs::pins` |
+| `busy=true` with frozen `read_offset` | PSRAM streaming stalled |
+| Color bars visible but `oxivgl_widget_demo` UI missing | LVGL flush path — check `lvgl_flushes` counter in the heartbeat log |
+| Bars look mis-colored / shifted | RGB565 data pin order differs — swap the data pin mapping in `LcdPins` |
+
+The widget demo also draws the color bars under the UI at boot, so a working
+scan-out is visible even if LVGL never flushes.
 
 OxivGL builds need:
 

@@ -6,6 +6,7 @@
 //! frame without an explicit present step.
 
 use core::ffi::c_void;
+use core::sync::atomic::{AtomicU32, Ordering};
 use core::{ptr, slice};
 
 use oxivgl::display::{DISPLAY_READY, LvglBuffers};
@@ -23,6 +24,17 @@ static mut LVGL_DISP: *mut lv_display_t = ptr::null_mut();
 
 /// PSRAM framebuffer base (set once in [`PsramDisplay::init`]).
 static mut FRAMEBUFFER: *mut u8 = ptr::null_mut();
+
+/// Number of LVGL flushes copied into the framebuffer (debug statistics).
+static FLUSH_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// How many LVGL flushes have reached the PSRAM framebuffer so far.
+///
+/// If this stays at 0 the LVGL render path is broken; if it advances but the
+/// panel stays dark, the problem is in the scan-out or panel wiring.
+pub fn flush_count() -> u32 {
+    FLUSH_COUNT.load(Ordering::Relaxed)
+}
 
 /// PSRAM-backed LVGL display token — proves display init completed.
 #[derive(Debug)]
@@ -84,6 +96,8 @@ unsafe extern "C" fn flush_callback(disp: *mut lv_display_t, area_p: *const lv_a
 
     // SAFETY: px_map points at `w*h` RGB565 pixels supplied by LVGL.
     let src = unsafe { slice::from_raw_parts(px_map, row_bytes * h) };
+
+    FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
 
     // SAFETY: FRAMEBUFFER was set in init and covers DISPLAY_HEIGHT rows.
     unsafe {
