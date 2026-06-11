@@ -9,7 +9,11 @@ The cloud agent cannot build it (`protronic/Graphics4D-pico` is private).
 
 Without the `.a`, the example uses **Embassy PIO+DPI scan-out** (`src/dpi.rs`) automatically.
 
-## Add the library (maintainers, local machine)
+## Self-hosted worker (recommended)
+
+See `README.md` → **Self-hosted worker** and `.github/workflows/vendor-graphics4d.yml`.
+
+## Add the library manually (local machine)
 
 ```bash
 cd examples/gen4-rp2350-70ct-clb

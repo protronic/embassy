@@ -49,22 +49,10 @@ if [[ ! -f "${DEST}/include/Graphics4D.h" ]]; then
     cp -f "${SDK}/src/Graphics4D.h" "${DEST}/include/Graphics4D.h"
 fi
 
-cat > "${DEST}/README.md" <<EOF
-# Vendored Graphics4D (RP2350)
-
-Prebuilt scan-out library for the gen4-RP2350-70CT-CLB Embassy example.
-
-Regenerate (maintainers only):
-
-\`\`\`bash
-export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico
-export PICO_SDK_PATH=/usr/share/pico-sdk
-./scripts/vendor-graphics4d-into-repo.sh
-git add vendor/graphics4d-rp2350
-\`\`\`
-
-Built from Graphics4D-pico on: $(date -u +%Y-%m-%dT%H:%MZ)
-Source tree: ${SDK}
+cat > "${DEST}/BUILD_INFO.txt" <<EOF
+built_utc=$(date -u +%Y-%m-%dT%H:%MZ)
+source=${SDK}
+host=$(uname -n)
 EOF
 
 echo "=== 3/3 done ==="

@@ -1,0 +1,66 @@
+# Build libgraphics4d_rp2350.a on a self-hosted worker and commit it into the repo.
+#
+# Why self-hosted?
+#   - protronic/Graphics4D-pico is private (GitHub-hosted runners cannot clone it)
+#   - Pico SDK + arm-none-eabi-gcc are preinstalled on your build machine (e.g. CachyOS)
+#
+# Setup (once on your Linux box):
+#   1. sudo pacman -S cmake ninja arm-none-eabi-gcc pico-sdk rustup
+#   2. Register a GitHub Actions self-hosted runner with label `graphics4d`
+#      Settings → Actions → Runners → New self-hosted runner
+#   3. Either:
+#        - clone Graphics4D-pico to a fixed path and set runner env GEN4_GRAPHICS4D_SDK, or
+#        - add repo secret GRAPHICS4D_PICO_TOKEN (PAT with read access to Graphics4D-pico)
+#
+# Run: Actions → "Vendor Graphics4D lib" → Run workflow
+
+name: Vendor Graphics4D lib
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_branch:
+        description: Branch to update with the vendored .a
+        required: true
+        default: cursor/gen4-rp2350-70ct-clb-36d2
+      push_commit:
+        description: Commit and push vendored lib to the branch
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  vendor-graphics4d:
+    runs-on: [self-hosted, graphics4d]
+    timeout-minutes: 60
+    steps:
+      - name: Checkout target branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 0
+
+      - name: Build and vendor libgraphics4d_rp2350.a
+        working-directory: examples/gen4-rp2350-70ct-clb
+        env:
+          PICO_SDK_PATH: ${{ vars.PICO_SDK_PATH }}
+          GEN4_GRAPHICS4D_SDK: ${{ vars.GEN4_GRAPHICS4D_SDK }}
+          GRAPHICS4D_PICO_TOKEN: ${{ secrets.GRAPHICS4D_PICO_TOKEN }}
+          PUSH: ${{ inputs.push_commit && '1' || '0' }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          chmod +x scripts/*.sh
+          ./scripts/graphics4d-worker-build.sh
+
+      - name: Upload vendored archive (artifact backup)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphics4d-rp2350-${{ github.run_id }}
+          path: |
+            examples/gen4-rp2350-70ct-clb/vendor/graphics4d-rp2350/lib/libgraphics4d_rp2350.a
+            examples/gen4-rp2350-70ct-clb/vendor/graphics4d-rp2350/include/
+          if-no-files-found: warn
+          retention-days: 30

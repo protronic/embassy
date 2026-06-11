@@ -24,6 +24,7 @@ DEST="${CRATE_DIR}/vendor/graphics4d-rp2350"
 LIB="${DEST}/lib/libgraphics4d_rp2350.a"
 HDR="${DEST}/include/Graphics4D.h"
 PUSH="${PUSH:-1}"
+TARGET_BRANCH="${TARGET_BRANCH:-}"
 COMMIT_MSG="${COMMIT_MSG:-vendor(gen4): add prebuilt libgraphics4d_rp2350.a}"
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -55,7 +56,7 @@ fi
 git -C "${REPO_ROOT}" commit -m "${COMMIT_MSG}"
 
 if [[ "${PUSH}" == "1" ]]; then
-    branch="$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD)"
+    branch="${TARGET_BRANCH:-$(git -C "${REPO_ROOT}" rev-parse --abbrev-ref HEAD)}"
     echo "=== pushing ${branch} ==="
     git -C "${REPO_ROOT}" push -u origin "${branch}"
 fi
