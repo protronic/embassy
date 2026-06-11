@@ -75,12 +75,15 @@ Workshop5 often ships **only headers** in Graphics4D-pico (`src/Graphics4D.h`), 
 ./scripts/inspect-graphics4d-pico.sh    # what is in your tree?
 ```
 
-**A) `src/*.cpp` present** — build on Linux:
+**A) `src/*.cpp` present** — build on Linux (needs `cmake`, `ninja`, Pico SDK 2.x):
 
 ```bash
-export PICO_SDK_PATH=~/pico/pico-sdk
+export PICO_SDK_PATH=/usr/share/pico-sdk
+export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico
 ./scripts/build-graphics4d-lib.sh
 ```
+
+The script uses an **Embassy CMake wrapper** by default. The upstream `Graphics4D-pico/CMakeLists.txt` expects a Workshop5 parent project (`../pico_sdk_import.cmake`) and is only tried with `GRAPHICS4D_NATIVE_CMAKE=1`.
 
 **B) only `.h`, no sources** — on Windows, compile any Workshop5 gen4-RP2350 project, then:
 
