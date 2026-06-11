@@ -1,4 +1,4 @@
-built_utc=2026-06-11T16:09Z
+built_utc=2026-06-11T16:21Z
 source=/workspace
 toolchain=/home/ubuntu/pico-sdk/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake
 compiler=arm-none-eabi-gcc (15:13.2.rel1-2) 13.2.1 20231009
@@ -7,4 +7,5 @@ board=gen4_rp2350_70ct
 platform=rp2350
 pico_rp2350a=0
 cmake_target=graphics4d_rp2350
-lib_sha256=3d175cece456324b3a17f35aae9cc0d5622c973972a6475f8951a8d7c1fb6c8b
+packaging=cmake_target_plus_strip_embassy_lib
+lib_sha256=0bcd6091ef76df48cf713bccc189a6871d36fa53cd24250c12205d46cc468bf3
