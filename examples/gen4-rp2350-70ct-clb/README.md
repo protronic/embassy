@@ -39,17 +39,17 @@ cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 
 ## RGB panel scanout (Graphics4D-pico)
 
-The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver from Workshop5. This example links it via the git submodule:
+The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver from Workshop5. Clone the companion library into `vendor/Graphics4D-pico`:
 
 ```bash
-# once, from the embassy repo root:
-git submodule update --init examples/gen4-rp2350-70ct-clb/vendor/Graphics4D-pico
-
 cd examples/gen4-rp2350-70ct-clb
+./scripts/init-graphics4d-pico.sh
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-The build script looks for `include/Graphics4D.h` and `lib/libgraphics4d_rp2350.a` inside `vendor/Graphics4D-pico`. Without it, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub (blank panel).
+The script clones [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico) (override with `GRAPHICS4D_PICO_URL` for SSH or a fork). The build script looks for `include/Graphics4D.h` and `lib/libgraphics4d_rp2350.a` inside that directory. Without it, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub (blank panel).
+
+> **Note:** `vendor/Graphics4D-pico/` is gitignored in this crate. If the remote repo does not exist yet, create/push `protronic/Graphics4D-pico` first, or point `GEN4_GRAPHICS4D_SDK` at a local Workshop5 install.
 
 ### Workshop5 / local SDK override
 

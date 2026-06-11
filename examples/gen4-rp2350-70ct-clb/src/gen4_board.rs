@@ -95,7 +95,7 @@ pub fn log_panel_driver_status() {
     uinfo!("panel: Graphics4D linked — RGB scanout active");
     #[cfg(not(gen4_graphics4d))]
     uwarn!(
-        "panel: Graphics4D not found — init submodule vendor/Graphics4D-pico or set GEN4_GRAPHICS4D_SDK; display stays blank"
+        "panel: Graphics4D not found — run scripts/init-graphics4d-pico.sh or set GEN4_GRAPHICS4D_SDK; display stays blank"
     );
 }
 

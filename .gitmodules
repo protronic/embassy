@@ -1,3 +1,0 @@
-[submodule "examples/gen4-rp2350-70ct-clb/vendor/Graphics4D-pico"]
-	path = examples/gen4-rp2350-70ct-clb/vendor/Graphics4D-pico
-	url = https://github.com/protronic/Graphics4D-pico.git

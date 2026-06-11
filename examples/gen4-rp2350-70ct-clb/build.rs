@@ -1,8 +1,8 @@
 //! Build script for gen4-RP2350-70CT-CLB examples.
 //!
 //! RGB panel scan-out is provided by 4D Systems' proprietary **Graphics4D**
-//! library. By default we look for it in the git submodule at
-//! `vendor/Graphics4D-pico` (https://github.com/protronic/Graphics4D-pico).
+//! library. By default we look for it in `vendor/Graphics4D-pico`
+//! (clone via `scripts/init-graphics4d-pico.sh`).
 //! Override with `GEN4_GRAPHICS4D_SDK` if the library lives elsewhere
 //! (e.g. a local Workshop5 install).
 
@@ -116,7 +116,7 @@ fn build_display_driver(manifest_dir: &Path) {
         build_gfx4d_glue(&sdk);
     } else {
         println!(
-            "cargo:warning=Graphics4D not found — clone submodule: git submodule update --init vendor/Graphics4D-pico (or set GEN4_GRAPHICS4D_SDK). RGB scanout is stubbed."
+            "cargo:warning=Graphics4D not found — run scripts/init-graphics4d-pico.sh (or set GEN4_GRAPHICS4D_SDK). RGB scanout is stubbed."
         );
         build_stub_glue();
     }
