@@ -73,7 +73,7 @@ After linking Graphics4D, rebuild, reflash, and confirm:
 panel: Graphics4D linked — RGB scanout active
 ```
 
-> **Note:** `vendor/Graphics4D-pico/` is gitignored. If the GitHub repo does not exist yet, export the Workshop5 Graphics4D tree from Windows and set `GEN4_GRAPHICS4D_SDK` on Linux (see below).
+> **Note:** `vendor/Graphics4D-pico/` (full source clone) stays gitignored. Only `vendor/graphics4d-rp2350/` (prebuilt lib + headers) is committed.
 
 ### Workshop5 — `libgraphics4d_rp2350.a` not found?
 
