@@ -35,13 +35,22 @@ warn() { echo "warning: $*" >&2; }
     || die "Graphics4D.h not found under ${SDK}"
 
 if [[ -z "${PICO_SDK_PATH:-}" ]]; then
-    die "PICO_SDK_PATH is not set (need Pico SDK 2.x with RP2350 / gen4 board headers)"
+    for candidate in /usr/share/pico-sdk /usr/lib/pico-sdk "${HOME}/pico/pico-sdk" "${HOME}/pico-sdk"; do
+        if [[ -d "${candidate}/external/pico_sdk_import.cmake" || -f "${candidate}/external/pico_sdk_import.cmake" ]]; then
+            PICO_SDK_PATH="${candidate}"
+            export PICO_SDK_PATH
+            echo "Using PICO_SDK_PATH=${PICO_SDK_PATH}"
+            break
+        fi
+    done
 fi
+[[ -n "${PICO_SDK_PATH:-}" ]] || die "PICO_SDK_PATH is not set (Pico SDK 2.x with RP2350 support; Arch: /usr/share/pico-sdk)"
 [[ -d "${PICO_SDK_PATH}" ]] || die "PICO_SDK_PATH=${PICO_SDK_PATH} is not a directory"
 
-command -v arm-none-eabi-g++ >/dev/null || die "arm-none-eabi-g++ not found"
+command -v arm-none-eabi-g++ >/dev/null || die "arm-none-eabi-g++ not found (Arch: sudo pacman -S arm-none-eabi-gcc)"
 command -v arm-none-eabi-ar >/dev/null || die "arm-none-eabi-ar not found"
-command -v cmake >/dev/null || die "cmake not found (install cmake + ninja)"
+command -v cmake >/dev/null || die "cmake not found (Arch: sudo pacman -S cmake)"
+command -v ninja >/dev/null || die "ninja not found (Arch: sudo pacman -S ninja)"
 
 TOOLCHAIN="${PICO_SDK_PATH}/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
 [[ -f "${TOOLCHAIN}" ]] || die "Pico toolchain file missing: ${TOOLCHAIN}"
