@@ -111,14 +111,15 @@ if [[ "${status}" -eq 0 ]]; then
     echo "  cargo build --bin oxivgl_widget_demo --features oxivgl,touch"
     echo "Boot log should show: panel: Graphics4D linked — RGB scanout active"
 else
-    echo "Graphics4D NOT ready — current firmware uses the scanout STUB (blank panel)."
+    echo "Graphics4D NOT ready — firmware uses Embassy PIO+DPI scanout (src/dpi.rs)."
+    echo "To link Graphics4D instead, vendor libgraphics4d_rp2350.a (see below)."
     echo
     echo "Build once and vendor the .a into this repo (Arch/CachyOS):"
     echo "  sudo pacman -S cmake ninja arm-none-eabi-gcc pico-sdk"
     echo "  export PICO_SDK_PATH=/usr/share/pico-sdk"
     echo "  export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico"
     echo "  ./scripts/vendor-graphics4d-into-repo.sh"
-    echo "  git add vendor/graphics4d-rp2350 && git commit"
+    echo "  ./scripts/commit-vendored-graphics4d.sh"
     echo "  ./scripts/check-graphics4d.sh"
     echo "  cargo build --bin oxivgl_widget_demo --features oxivgl,touch"
     echo

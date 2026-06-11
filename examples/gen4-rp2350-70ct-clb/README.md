@@ -41,23 +41,26 @@ cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 
 The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver from Workshop5.
 
-**Normal workflow:** `vendor/graphics4d-rp2350/` in this repo contains the prebuilt `libgraphics4d_rp2350.a` + headers — no local Graphics4D build needed:
+**Default:** Embassy PIO+DPI scan-out works without Graphics4D (see `src/dpi.rs`).
+
+**Optional Graphics4D:** `vendor/graphics4d-rp2350/` should contain the prebuilt `libgraphics4d_rp2350.a` + headers. That archive is **not in git yet** — build and push from a machine with Graphics4D-pico sources:
 
 ```bash
 cd examples/gen4-rp2350-70ct-clb
-./scripts/check-graphics4d.sh
-cargo run --bin oxivgl_widget_demo --features oxivgl,touch
+export PICO_SDK_PATH=/usr/share/pico-sdk
+export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico
+./scripts/vendor-graphics4d-into-repo.sh
+./scripts/commit-vendored-graphics4d.sh    # git add + commit + push
 ```
 
-**Regenerate the vendored library** (maintainers, once per Graphics4D-pico update):
+**Regenerate** (maintainers, once per Graphics4D-pico update):
 
 ```bash
 sudo pacman -S cmake ninja arm-none-eabi-gcc pico-sdk
 export PICO_SDK_PATH=/usr/share/pico-sdk
 export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico
 ./scripts/vendor-graphics4d-into-repo.sh
-git add vendor/graphics4d-rp2350
-git commit -m "vendor(gen4): update libgraphics4d_rp2350.a"
+./scripts/commit-vendored-graphics4d.sh
 ```
 
 Without Graphics4D, Embassy **PIO+DPI scan-out** drives the panel automatically
