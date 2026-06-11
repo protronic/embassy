@@ -6,6 +6,7 @@
 use core::ffi::c_void;
 use core::ptr;
 use core::slice;
+use core::sync::atomic::{AtomicU32, Ordering};
 
 use oxivgl::display::{DISPLAY_READY, LvglBuffers};
 use oxivgl_sys::{
@@ -20,6 +21,17 @@ use crate::gen4_board::{self, PsramFramebuffers};
 static mut LVGL_DISP: *mut lv_display_t = core::ptr::null_mut();
 static mut FRAME: Option<PsramFramebuffers> = None;
 static mut SHOW_FRONT: bool = false;
+
+static FLUSH_COUNT: AtomicU32 = AtomicU32::new(0);
+static PRESENT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// LVGL flush / panel present counters (for USB debug logging).
+pub fn scanout_stats() -> (u32, u32) {
+    (
+        FLUSH_COUNT.load(Ordering::Relaxed),
+        PRESENT_COUNT.load(Ordering::Relaxed),
+    )
+}
 
 /// LVGL display token — proves LVGL display init completed.
 #[derive(Debug)]
@@ -149,6 +161,7 @@ pub fn present_framebuffer() {
                 gen4_board::DISPLAY_WIDTH as u16,
                 gen4_board::DISPLAY_HEIGHT as u16,
             );
+            PRESENT_COUNT.fetch_add(1, Ordering::Relaxed);
         }
     }
 }
@@ -203,6 +216,7 @@ unsafe extern "C" fn flush_callback(
                 );
             }
         }
+        FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
         lv_display_flush_ready(disp);
     }
 }

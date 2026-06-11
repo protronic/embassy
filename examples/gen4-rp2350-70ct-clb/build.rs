@@ -4,6 +4,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(gen4_graphics4d)");
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
     File::create(out.join("memory.x"))
         .unwrap()
@@ -34,6 +35,7 @@ fn build_display_driver() {
         if include.is_dir() && src.is_dir() {
             build.define("GEN4_USE_GRAPHICS4D", None);
             build.include(&include);
+            println!("cargo:rustc-cfg=gen4_graphics4d");
             println!("cargo:rustc-link-search=native={}", sdk.join("lib").display());
             println!("cargo:rustc-link-lib=static=graphics4d_rp2350");
             println!(

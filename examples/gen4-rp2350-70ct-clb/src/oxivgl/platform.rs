@@ -7,6 +7,7 @@ use embassy_rp::i2c::{Blocking, I2c};
 #[cfg(feature = "touch")]
 use embassy_rp::peripherals;
 use embassy_time::{Duration, Instant, Timer};
+use log::info as uinfo;
 use oxivgl::display::{DISPLAY_READY, LvglBuffers};
 use oxivgl::driver::LvglDriver;
 use oxivgl::view::{View, register_view_events};
@@ -117,6 +118,7 @@ pub async fn run_widget_demo(
         ..
     } = resources;
 
+    uinfo!("oxivgl: lvgl driver init");
     let driver = LvglDriver::init(DISPLAY_WIDTH as i32, gen4_board::DISPLAY_HEIGHT as i32);
     let _display = RgbDisplay::init(
         DISPLAY_WIDTH as i32,
@@ -126,6 +128,7 @@ pub async fn run_widget_demo(
     );
 
     DISPLAY_READY.wait().await;
+    uinfo!("oxivgl: display ready, prefill + first present");
     prefill_background();
     present_framebuffer();
 
@@ -134,10 +137,12 @@ pub async fn run_widget_demo(
     let container = Obj::from_raw_non_owning(screen.handle());
     if view.create(&container).is_err() {
         defmt::warn!("oxivgl widget create failed");
+        uinfo!("oxivgl: widget create FAILED");
         loop {
             Timer::after(Duration::from_secs(60)).await;
         }
     }
+    uinfo!("oxivgl: widgets created");
     register_view_events(view);
     view.log_layout();
 
@@ -150,6 +155,13 @@ pub async fn run_widget_demo(
     lvgl_present_batch(&driver, view, &touch, &mut poller).await;
     #[cfg(not(feature = "touch"))]
     lvgl_present_batch(&driver, view).await;
+
+    let (flushes, presents) = crate::oxivgl::display::scanout_stats();
+    uinfo!(
+        "oxivgl: first frame done (lvgl_flushes={} panel_presents={})",
+        flushes,
+        presents
+    );
 
     let mut next_present = Instant::now() + Duration::from_millis(PRESENT_PERIOD_MS);
 

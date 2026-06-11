@@ -9,6 +9,8 @@
 //! (backlight, panel reset, touch controller).
 
 use defmt::info;
+use embassy_executor::Spawner;
+use log::{info as uinfo, warn as uwarn};
 use embassy_rp::gpio::{Level, Output};
 #[cfg(feature = "touch")]
 use embassy_rp::gpio::{Input, Pull};
@@ -66,9 +68,20 @@ pub struct DisplayResources {
     pub i2c: I2c<'static, peripherals::I2C1, Blocking>,
 }
 
-/// Initialise PSRAM, panel, backlight, and optional FT5446 touch.
-pub async fn init(p: Peripherals) -> Option<DisplayResources> {
+/// Log whether the Graphics4D panel driver is linked (needs `GEN4_GRAPHICS4D_SDK`).
+pub fn log_panel_driver_status() {
+    #[cfg(gen4_graphics4d)]
+    uinfo!("panel: Graphics4D SDK linked — RGB scanout active");
+    #[cfg(not(gen4_graphics4d))]
+    uwarn!(
+        "panel: GEN4_GRAPHICS4D_SDK not set — gen4_lcd_present_rgb565() is a STUB; display stays blank"
+    );
+}
+
+/// Initialise PSRAM, panel, backlight, USB logging, and optional FT5446 touch.
+pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources> {
     let Peripherals {
+        USB,
         QMI_CS1,
         PIN_0,
         PIN_17,
@@ -87,14 +100,31 @@ pub async fn init(p: Peripherals) -> Option<DisplayResources> {
         ..
     } = p;
 
+    crate::usb_log::spawn(spawner, USB);
+    Timer::after(Duration::from_millis(100)).await;
+    log_panel_driver_status();
+    uinfo!(
+        "gen4-RP2350-70CT-CLB OxivGL demo ({}x{})",
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT
+    );
+    uinfo!("board init: starting");
+
     let psram = Psram::new(
         QmiCs1::new(QMI_CS1, PIN_0),
         psram::Config::aps6404l(),
     )
     .ok()?;
+    uinfo!("board init: PSRAM OK ({} KiB)", psram.size() / 1024);
 
     // SAFETY: PSRAM is mapped and sized by the driver.
     let framebuffers = unsafe { PsramFramebuffers::new(&psram)? };
+    uinfo!(
+        "board init: framebuffers {}x{} RGB565 x2 ({} KiB each)",
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+        FB_BYTES / 1024
+    );
 
     info!(
         "gen4 PSRAM ready: {} KiB, framebuffers {}x{} RGB565 x2",
@@ -105,12 +135,14 @@ pub async fn init(p: Peripherals) -> Option<DisplayResources> {
 
     reset_panel(PIN_37).await;
     init_backlight(PWM_SLICE0, PIN_17);
+    uinfo!("board init: panel reset + backlight PWM done");
 
     // SAFETY: C shim may call into Graphics4D when `GEN4_GRAPHICS4D_SDK` is set.
     unsafe {
         gen4_lcd_init();
         gen4_lcd_backlight_enable();
     }
+    uinfo!("board init: gen4_lcd_init() returned");
 
     #[cfg(feature = "touch")]
     {
@@ -118,6 +150,7 @@ pub async fn init(p: Peripherals) -> Option<DisplayResources> {
         let i2c = I2c::new_blocking(I2C1, PIN_39, PIN_46, I2cConfig::default());
         let _touch_int = Input::new(PIN_38, Pull::Up);
         info!("FT5446 touch on I2C1 (SCL=GPIO39, SDA=GPIO46)");
+        uinfo!("board init: FT5446 touch on I2C1");
         return Some(DisplayResources {
             psram,
             framebuffers,
@@ -126,10 +159,13 @@ pub async fn init(p: Peripherals) -> Option<DisplayResources> {
     }
 
     #[cfg(not(feature = "touch"))]
-    Some(DisplayResources {
-        psram,
-        framebuffers,
-    })
+    {
+        uinfo!("board init: complete (no touch feature)");
+        Some(DisplayResources {
+            psram,
+            framebuffers,
+        })
+    }
 }
 
 async fn reset_panel(rst: Peri<'static, PIN_37>) {
