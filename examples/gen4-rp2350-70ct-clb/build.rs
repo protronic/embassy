@@ -30,6 +30,9 @@ fn main() {
     println!("cargo:rerun-if-changed=c/pico_sdk_stubs.c");
     println!("cargo:rerun-if-changed=c/display.h");
     println!("cargo:rerun-if-changed=scripts/filter-graphics4d-embassy-lib.sh");
+    println!("cargo:rerun-if-changed=scripts/build-pico-embassy-lib.sh");
+    println!("cargo:rerun-if-changed=cmake/pico-embassy-lib/CMakeLists.txt");
+    println!("cargo:rerun-if-env-changed=PICO_SDK_PATH");
     println!("cargo:rerun-if-env-changed=GEN4_GRAPHICS4D_SDK");
     println!(
         "cargo:rerun-if-changed={}",
@@ -335,6 +338,47 @@ fn prepare_embassy_graphics4d_lib(sdk: &Path, out_dir: &Path) -> (PathBuf, Strin
     (lib_dir, lib_name.to_string())
 }
 
+fn build_pico_embassy_lib(out_dir: &Path, bin: &str) {
+    let Ok(pico_sdk) = env::var("PICO_SDK_PATH") else {
+        println!(
+            "cargo:warning=PICO_SDK_PATH unset — slim Graphics4D lib needs libpico_embassy.a (set PICO_SDK_PATH or use fat vendored .a)"
+        );
+        return;
+    };
+    if !Path::new(&pico_sdk).is_dir() {
+        println!("cargo:warning=PICO_SDK_PATH={pico_sdk} is not a directory");
+        return;
+    }
+
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    let script = manifest_dir.join("scripts/build-pico-embassy-lib.sh");
+    if !script.is_file() {
+        return;
+    }
+
+    let pico_out = out_dir.join("pico-embassy");
+    let board_dir = manifest_dir.join("board");
+    let status = std::process::Command::new("bash")
+        .arg(&script)
+        .env("PICO_SDK_PATH", &pico_sdk)
+        .env("OUT_DIR", &pico_out)
+        .env("BOARD_DIR", &board_dir)
+        .status();
+
+    let lib = pico_out.join("libpico_embassy.a");
+    match status {
+        Ok(s) if s.success() && lib.is_file() => {
+            println!("cargo:rustc-link-search=native={}", pico_out.display());
+            println!("cargo:rustc-link-arg-bin={bin}=-lpico_embassy");
+            println!(
+                "cargo:warning=Linking Pico SDK support from {}",
+                lib.display()
+            );
+        }
+        _ => println!("cargo:warning=libpico_embassy.a build failed — Graphics4D hardware symbols may be missing"),
+    }
+}
+
 fn link_graphics4d(sdk: &Path, out_dir: &Path) {
     let (lib_dir, lib_name) = prepare_embassy_graphics4d_lib(sdk, out_dir);
     let bin = "oxivgl_widget_demo";
@@ -343,6 +387,7 @@ fn link_graphics4d(sdk: &Path, out_dir: &Path) {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     // Link into the firmware binary only — avoids embedding the whole .a in the Rust rlib.
     println!("cargo:rustc-link-arg-bin={bin}=-l{lib_name}");
+    build_pico_embassy_lib(out_dir, bin);
     link_arm_eabihf_toolchain(bin);
     println!(
         "cargo:warning=Linking Graphics4D RGB scanout from {}",

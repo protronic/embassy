@@ -1,5 +1,5 @@
-/* f_util.h
-Copyright 2021 Carl John Kugler III
+/* FatFsSd_C.h
+Copyright 2023 Carl John Kugler III
 
 Licensed under the Apache License, Version 2.0 (the License); you may not use 
 this file except in compliance with the License. You may obtain a copy of the 
@@ -12,21 +12,13 @@ CONDITIONS OF ANY KIND, either express or implied. See the License for the
 specific language governing permissions and limitations under the License.
 */
 #pragma once
-#include "ff.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-    const char *FRESULT_str(FRESULT i);
-    FRESULT delete_node (
-        TCHAR* path,    /* Path name buffer with the sub-directory to delete */
-        UINT sz_buff,   /* Size of path name buffer (items) */
-        FILINFO* fno    /* Name read buffer */
-    );
-
-    void ls(const char *dir);
-    
-#ifdef __cplusplus
-}
-#endif
+#include "../src/ff15/source/ff.h"
+//
+#include "../src/ff15/source/diskio.h" /* Declarations of disk functions */
+#include "../src/include/f_util.h"
+#include "../src/include/my_rtc.h"
+#include "../src/sd_driver/sd_card.h"
+#include "../src/sd_driver/SDIO/rp2040_sdio.h"
+#include "../src/sd_driver/SPI/my_spi.h"
+#include "../src/include/hw_config.h"
