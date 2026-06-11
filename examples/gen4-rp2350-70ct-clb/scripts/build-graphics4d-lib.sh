@@ -6,9 +6,9 @@
 #   - PICO_SDK_PATH pointing at Raspberry Pi Pico SDK 2.x (with RP2350 support)
 #
 # Usage:
-#   export PICO_SDK_PATH=~/pico/pico-sdk
+#   export PICO_SDK_PATH=/usr/share/pico-sdk
+#   export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico
 #   ./scripts/build-graphics4d-lib.sh
-#   GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico ./scripts/build-graphics4d-lib.sh
 
 set -euo pipefail
 
@@ -19,6 +19,7 @@ SDK="$(cd "${SDK}" && pwd)"
 LIB_OUT="${SDK}/lib/libgraphics4d_rp2350.a"
 BOARD_DIR="${CRATE_DIR}/board"
 PICO_BOARD="${PICO_BOARD:-gen4_rp2350_70ct}"
+EMBASSY_CMAKE="${CRATE_DIR}/cmake/graphics4d-lib"
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -36,68 +37,77 @@ command -v arm-none-eabi-ar >/dev/null || die "arm-none-eabi-ar not found"
 
 mkdir -p "${SDK}/lib"
 
-# Prefer the library's own Embassy/CMake recipe when present.
+# CMake and our wrapper read these at *configure* time.
+export PICO_SDK_PATH
+export GRAPHICS4D_SDK="${SDK}"
+
+TOOLCHAIN="${PICO_SDK_PATH}/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
+[[ -f "${TOOLCHAIN}" ]] || die "Pico toolchain file missing: ${TOOLCHAIN}"
+
+copy_built_lib() {
+    local build_dir="$1"
+    mapfile -t BUILT < <(
+        find "${build_dir}" -type f \( \
+            -name 'libgraphics4d_rp2350.a' -o \
+            -name 'libgraphics4d.a' -o \
+            -name 'libGraphics4D.a' \
+        \) 2>/dev/null | sort
+    )
+    [[ ${#BUILT[@]} -gt 0 ]] || return 1
+    cp -f "${BUILT[0]}" "${LIB_OUT}"
+    echo "Built ${LIB_OUT} (from ${BUILT[0]})"
+}
+
+# 1) Library-maintained Embassy script.
 if [[ -f "${SDK}/embassy/build.sh" ]]; then
     echo "Running ${SDK}/embassy/build.sh ..."
-    PICO_SDK_PATH="${PICO_SDK_PATH}" PICO_BOARD="${PICO_BOARD}" BOARD_DIR="${BOARD_DIR}" \
-        bash "${SDK}/embassy/build.sh"
+    PICO_BOARD="${PICO_BOARD}" BOARD_DIR="${BOARD_DIR}" bash "${SDK}/embassy/build.sh"
     [[ -f "${LIB_OUT}" ]] || die "embassy/build.sh did not produce ${LIB_OUT}"
-    echo "Built ${LIB_OUT}"
     exit 0
 fi
 
-EMBASSY_CMAKE="${CRATE_DIR}/cmake/graphics4d-lib"
-if [[ -d "${EMBASSY_CMAKE}" ]] && command -v cmake >/dev/null; then
-    BUILD_DIR="${SDK}/build-embassy-cmake"
-    TOOLCHAIN="${PICO_SDK_PATH}/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
-    [[ -f "${TOOLCHAIN}" ]] || die "Pico toolchain file missing: ${TOOLCHAIN}"
-
-    echo "CMake build (embassy wrapper) in ${BUILD_DIR} ..."
-    cmake -S "${EMBASSY_CMAKE}" -B "${BUILD_DIR}" -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
-        -DPICO_SDK_PATH="${PICO_SDK_PATH}" \
-        -DPICO_BOARD="${PICO_BOARD}"
-    env GRAPHICS4D_SDK="${SDK}" cmake --build "${BUILD_DIR}"
-
-    mapfile -t BUILT < <(find "${BUILD_DIR}" -name 'libgraphics4d_rp2350.a' 2>/dev/null)
-    [[ ${#BUILT[@]} -gt 0 ]] || die "CMake wrapper build produced no libgraphics4d_rp2350.a"
-    cp -f "${BUILT[0]}" "${LIB_OUT}"
-    echo "Built ${LIB_OUT} (from ${BUILT[0]})"
-    exit 0
-fi
-
-if [[ -f "${SDK}/CMakeLists.txt" ]] && command -v cmake >/dev/null; then
-    BUILD_DIR="${SDK}/build-embassy"
-    TOOLCHAIN="${PICO_SDK_PATH}/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
-    [[ -f "${TOOLCHAIN}" ]] || die "Pico toolchain file missing: ${TOOLCHAIN}"
-
-    echo "CMake build in ${BUILD_DIR} ..."
-    cmake -S "${SDK}" -B "${BUILD_DIR}" -G Ninja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DPICO_SDK_PATH="${PICO_SDK_PATH}" \
-        -DPICO_BOARD="${PICO_BOARD}" \
-        -DPICO_BOARD_HEADER_DIRS="${BOARD_DIR}" \
-        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}"
-    cmake --build "${BUILD_DIR}"
-
-    # Pick up the archive wherever the Graphics4D CMake target wrote it.
-    mapfile -t BUILT < <(find "${BUILD_DIR}" -name 'libgraphics4d*.a' -o -name 'libGraphics4D*.a' 2>/dev/null | head -5)
-    if [[ ${#BUILT[@]} -eq 0 ]]; then
-        die "CMake build finished but no libgraphics4d*.a found under ${BUILD_DIR}"
+if command -v cmake >/dev/null; then
+    # 2) Native Graphics4D-pico CMakeLists.txt (preferred).
+    if [[ -f "${SDK}/CMakeLists.txt" ]]; then
+        BUILD_DIR="${SDK}/build-embassy"
+        echo "CMake build (Graphics4D-pico) in ${BUILD_DIR} ..."
+        cmake -S "${SDK}" -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
+            -DPICO_SDK_PATH="${PICO_SDK_PATH}" \
+            -DPICO_BOARD="${PICO_BOARD}" \
+            -DPICO_BOARD_HEADER_DIRS="${BOARD_DIR}"
+        cmake --build "${BUILD_DIR}"
+        copy_built_lib "${BUILD_DIR}" && exit 0
+        die "Graphics4D-pico CMake build finished but no libgraphics4d*.a found under ${BUILD_DIR}"
     fi
-    cp -f "${BUILT[0]}" "${LIB_OUT}"
-    echo "Built ${LIB_OUT} (from ${BUILT[0]})"
-    exit 0
+
+    # 3) Embassy CMake wrapper (fallback).
+    if [[ -d "${EMBASSY_CMAKE}" ]]; then
+        BUILD_DIR="${SDK}/build-embassy-cmake"
+        echo "CMake build (embassy wrapper) in ${BUILD_DIR} ..."
+        cmake -S "${EMBASSY_CMAKE}" -B "${BUILD_DIR}" -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
+            -DGRAPHICS4D_SDK_PATH="${SDK}" \
+            -DPICO_BOARD="${PICO_BOARD}"
+        cmake --build "${BUILD_DIR}"
+        copy_built_lib "${BUILD_DIR}" && exit 0
+        die "Embassy CMake wrapper finished but no libgraphics4d_rp2350.a found under ${BUILD_DIR}"
+    fi
 fi
 
-# Fallback: compile all C/C++ sources under src/ into one static library.
+# 4) Manual compile fallback.
 OBJ_DIR="${SDK}/build-embassy-obj"
 rm -rf "${OBJ_DIR}"
 mkdir -p "${OBJ_DIR}"
 
 mapfile -t SOURCES < <(find "${SDK}/src" -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.c' \) | sort)
-[[ ${#SOURCES[@]} -gt 0 ]] || die "no .c/.cpp sources under ${SDK}/src — cannot build static lib"
+if [[ ${#SOURCES[@]} -eq 0 ]]; then
+    echo "error: no .c/.cpp sources under ${SDK}/src" >&2
+    echo "Run ./scripts/inspect-graphics4d-pico.sh" >&2
+    exit 1
+fi
 
 COMMON_FLAGS=(
     -mcpu=cortex-m33
@@ -151,8 +161,9 @@ done
 echo "Compiling ${#SOURCES[@]} Graphics4D source file(s) ..."
 OBJS=()
 for src in "${SOURCES[@]}"; do
-    base="$(basename "${src}")"
-    obj="${OBJ_DIR}/${base%.*}.o"
+    rel="${src#${SDK}/}"
+    obj="${OBJ_DIR}/${rel%.*}.o"
+    mkdir -p "$(dirname "${obj}")"
     case "${src}" in
         *.c)
             arm-none-eabi-gcc -c "${COMMON_FLAGS[@]}" "${INC_FLAGS[@]}" -o "${obj}" "${src}"

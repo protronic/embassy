@@ -1,27 +1,31 @@
-# Build libgraphics4d_rp2350.a from a Graphics4D-pico / Workshop5 source tree.
+# Embassy fallback: build libgraphics4d_rp2350.a from a Graphics4D-pico tree.
 #
-#   export PICO_SDK_PATH=...
-#   export GRAPHICS4D_SDK=.../vendor/Graphics4D-pico
-#   cmake -S cmake/graphics4d-lib -B "$GRAPHICS4D_SDK/build-embassy-cmake" -G Ninja \
-#     -DCMAKE_BUILD_TYPE=Release \
-#     -DCMAKE_TOOLCHAIN_FILE="$PICO_SDK_PATH/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
-#   cmake --build "$GRAPHICS4D_SDK/build-embassy-cmake"
-#   cp "$GRAPHICS4D_SDK/build-embassy-cmake/libgraphics4d_rp2350.a" "$GRAPHICS4D_SDK/lib/"
+# Prefer Graphics4D-pico's own CMakeLists.txt — this wrapper is only used when
+# that file is missing.
 
 cmake_minimum_required(VERSION 3.13)
 
-if(NOT DEFINED ENV{PICO_SDK_PATH})
+if(DEFINED GRAPHICS4D_SDK_PATH)
+    set(GRAPHICS4D_SDK "${GRAPHICS4D_SDK_PATH}")
+elseif(DEFINED ENV{GRAPHICS4D_SDK})
+    set(GRAPHICS4D_SDK "$ENV{GRAPHICS4D_SDK}")
+else()
+    message(FATAL_ERROR "GRAPHICS4D_SDK is not set (export GRAPHICS4D_SDK or pass -DGRAPHICS4D_SDK_PATH=...)")
+endif()
+
+if(DEFINED PICO_SDK_PATH)
+    set(PICO_SDK "${PICO_SDK_PATH}")
+elseif(DEFINED ENV{PICO_SDK_PATH})
+    set(PICO_SDK "$ENV{PICO_SDK_PATH}")
+else()
     message(FATAL_ERROR "PICO_SDK_PATH is not set")
 endif()
-if(NOT DEFINED ENV{GRAPHICS4D_SDK})
-    message(FATAL_ERROR "GRAPHICS4D_SDK is not set")
+
+if(NOT PICO_BOARD)
+    set(PICO_BOARD gen4_rp2350_70ct CACHE STRING "Board")
 endif()
 
-set(PICO_SDK_PATH $ENV{PICO_SDK_PATH})
-set(GRAPHICS4D_SDK $ENV{GRAPHICS4D_SDK})
-set(PICO_BOARD gen4_rp2350_70ct CACHE STRING "Board")
-
-include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+include(${PICO_SDK}/external/pico_sdk_import.cmake)
 
 project(graphics4d_rp2350 C CXX ASM)
 pico_sdk_init()
