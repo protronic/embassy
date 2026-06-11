@@ -13,6 +13,28 @@ VENDOR="${CRATE_DIR}/vendor/Graphics4D-pico"
 
 ok() { printf '  OK   %s\n' "$1"; }
 miss() { printf '  MISS %s\n' "$1"; }
+hint() { printf '  HINT %s\n' "$1"; }
+
+find_static_lib() {
+    local root="$1"
+    local lib
+    while IFS= read -r lib; do
+        if [[ -f "${lib}" ]]; then
+            echo "${lib}"
+            return 0
+        fi
+    done < <(
+        find "${root}" \( -path '*/build-embassy-obj/*' -o -path '*/.git/*' \) -prune -o \
+            -type f \( -name 'libgraphics4d_rp2350.a' -o -name 'libgraphics4d.a' -o -name 'libGraphics4D.a' \) -print 2>/dev/null \
+            | sort
+    )
+    return 1
+}
+
+count_sources() {
+    local root="$1"
+    find "${root}/src" -type f \( -name '*.cpp' -o -name '*.cc' -o -name '*.c' \) 2>/dev/null | wc -l
+}
 
 check_root() {
     local root="$1"
@@ -38,22 +60,31 @@ check_root() {
     done
     [[ "${found_header}" -eq 1 ]] || miss "Graphics4D.h (tried include/, root, src/)"
 
-    local found_lib=0
-    for lib in \
-        "${root}/lib/libgraphics4d_rp2350.a" \
-        "${root}/lib/libgraphics4d.a" \
-        "${root}/lib/libGraphics4D.a" \
-        "${root}/libgraphics4d_rp2350.a"
-    do
-        if [[ -f "${lib}" ]]; then
-            ok "static lib ${lib#${root}/}"
-            found_lib=1
-            break
-        fi
-    done
-    [[ "${found_lib}" -eq 1 ]] || miss "libgraphics4d_rp2350.a (tried lib/ and root)"
+    local lib
+    if lib="$(find_static_lib "${root}")"; then
+        ok "static lib ${lib#${root}/}"
+        [[ "${found_header}" -eq 1 ]]
+        return
+    fi
+    miss "libgraphics4d_rp2350.a"
 
-    [[ "${found_header}" -eq 1 && "${found_lib}" -eq 1 ]]
+    local n_sources
+    n_sources="$(count_sources "${root}")"
+    if [[ "${n_sources}" -gt 0 ]]; then
+        ok "sources ${n_sources} file(s) under src/"
+        hint "build the static lib: PICO_SDK_PATH=... ./scripts/build-graphics4d-lib.sh"
+    else
+        miss "C/C++ sources under src/"
+    fi
+
+    if [[ -f "${root}/CMakeLists.txt" ]]; then
+        hint "CMakeLists.txt present — build-graphics4d-lib.sh will try CMake + Pico SDK"
+    fi
+    if [[ -f "${root}/embassy/build.sh" ]]; then
+        hint "embassy/build.sh present — preferred build recipe"
+    fi
+
+    return 1
 }
 
 echo "Graphics4D check for gen4-rp2350-70ct-clb"
@@ -77,17 +108,15 @@ if [[ "${status}" -eq 0 ]]; then
 else
     echo "Graphics4D NOT ready — current firmware uses the scanout STUB (blank panel)."
     echo
-    echo "Option A — clone companion repo (once it exists on GitHub):"
-    echo "  ./scripts/init-graphics4d-pico.sh"
-    echo
-    echo "Option B — point at a local Workshop5 / exported SDK tree:"
-    echo "  export GEN4_GRAPHICS4D_SDK=/path/to/graphics4d-rp2350"
+    echo "Your tree has headers but no libgraphics4d_rp2350.a yet. Typical fix:"
+    echo "  export PICO_SDK_PATH=~/pico/pico-sdk    # Pico SDK 2.x"
+    echo "  export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico   # optional"
+    echo "  ./scripts/build-graphics4d-lib.sh"
+    echo "  ./scripts/check-graphics4d.sh"
     echo "  cargo build --bin oxivgl_widget_demo --features oxivgl,touch"
     echo
-    echo "Typical Workshop5 layout on Windows (adjust drive letter):"
-    echo "  C:/Users/<you>/AppData/Local/4D Systems/Workshop5/..."
-    echo "Search for Graphics4D.h and libgraphics4d_rp2350.a, then export GEN4_GRAPHICS4D_SDK"
-    echo "to the directory that contains include/ and lib/."
+    echo "Or copy a prebuilt libgraphics4d_rp2350.a from Workshop5 on Windows into:"
+    echo "  vendor/Graphics4D-pico/lib/"
 fi
 
 exit "${status}"

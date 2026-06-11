@@ -86,20 +86,28 @@ fn include_dirs(sdk: &Path) -> Vec<PathBuf> {
     dirs
 }
 
-/// Locate the prebuilt Graphics4D static archive shipped with Workshop5 / Graphics4D-pico.
-fn find_static_lib(sdk: &Path) -> Option<(PathBuf, &'static str)> {
-    let lib_dirs = [sdk.join("lib"), sdk.to_path_buf(), sdk.join("build")];
-    let names = [
+fn static_lib_names() -> [&'static str; 3] {
+    [
         "libgraphics4d_rp2350.a",
         "libgraphics4d.a",
         "libGraphics4D.a",
+    ]
+}
+
+/// Locate a prebuilt Graphics4D archive (Workshop5 export or `build-graphics4d-lib.sh` output).
+fn find_static_lib(sdk: &Path) -> Option<(PathBuf, &'static str)> {
+    let preferred_dirs = [
+        sdk.join("lib"),
+        sdk.join("build-embassy"),
+        sdk.join("build"),
+        sdk.to_path_buf(),
     ];
 
-    for dir in lib_dirs {
+    for dir in preferred_dirs {
         if !dir.is_dir() {
             continue;
         }
-        for name in names {
+        for name in static_lib_names() {
             let path = dir.join(name);
             if path.is_file() {
                 let stem = name.strip_prefix("lib").and_then(|s| s.strip_suffix(".a"))?;
@@ -107,7 +115,62 @@ fn find_static_lib(sdk: &Path) -> Option<(PathBuf, &'static str)> {
             }
         }
     }
+
+    // CMake / manual builds may place the archive deeper under build-*/.
+    find_static_lib_recursive(sdk)
+}
+
+fn find_static_lib_recursive(sdk: &Path) -> Option<(PathBuf, &'static str)> {
+    let mut stack = vec![sdk.join("build-embassy"), sdk.join("build")];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|n| n != "build-embassy-obj") {
+                    stack.push(path);
+                }
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if static_lib_names().contains(&name) {
+                let stem = name.strip_prefix("lib").and_then(|s| s.strip_suffix(".a"))?;
+                return Some((path.parent()?.to_path_buf(), stem));
+            }
+        }
+    }
     None
+}
+
+fn has_graphics4d_sources(sdk: &Path) -> bool {
+    let src = sdk.join("src");
+    if !src.is_dir() {
+        return false;
+    }
+    has_source_files(&src)
+}
+
+fn has_source_files(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if has_source_files(&path) {
+                return true;
+            }
+            continue;
+        }
+        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if matches!(ext, "c" | "cc" | "cpp") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn diagnose_missing_sdk(manifest_dir: &Path) {

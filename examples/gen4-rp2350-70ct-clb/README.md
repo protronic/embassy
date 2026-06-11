@@ -43,17 +43,16 @@ The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** 
 
 ```bash
 cd examples/gen4-rp2350-70ct-clb
-./scripts/init-graphics4d-pico.sh
+./scripts/init-graphics4d-pico.sh          # or use your existing vendor/Graphics4D-pico clone
+export PICO_SDK_PATH=~/pico/pico-sdk       # Pico SDK 2.x
+./scripts/build-graphics4d-lib.sh          # if the repo has sources but no .a yet
+./scripts/check-graphics4d.sh
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-The script clones [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico) (override with `GRAPHICS4D_PICO_URL` for SSH or a fork). Check before building:
+The init script clones [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico). Many Workshop5 exports ship **`src/Graphics4D.h` + C++ sources** without a prebuilt Linux archive — `build-graphics4d-lib.sh` compiles `lib/libgraphics4d_rp2350.a` using the Pico SDK (or runs `embassy/build.sh` / CMake when present).
 
-```bash
-./scripts/check-graphics4d.sh
-```
-
-The build script needs **`include/Graphics4D.h`** and **`lib/libgraphics4d_rp2350.a`** under the SDK root. Without them, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub — USB log shows:
+The Embassy build needs **`Graphics4D.h`** and **`libgraphics4d_rp2350.a`** under the SDK root. Without them, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub — USB log shows:
 
 ```text
 panel: Graphics4D not found — ...
