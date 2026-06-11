@@ -87,9 +87,10 @@ cargo run --bin oxivgl_widget_demo --features oxivgl
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-Touch input uses the same LVGL **TIMER-mode** pointer indev path as the SDL host
-demo (`examples/oxivgl-host`): publish the latest I2C sample, then call
-`timer_handler()` so LVGL reads it during `lv_timer_handler()`.
+Touch uses two Embassy tasks: `touch_feed` polls I2C into a `Watch`, the UI
+task publishes samples and calls `lv_indev_read()` after each `timer_handler()`
+(EVENT-mode indev with paused read timer — required on STM32; TIMER mode left
+`pt=(0,0)` in logs).
 
 With `touch`, RTT logs include:
 

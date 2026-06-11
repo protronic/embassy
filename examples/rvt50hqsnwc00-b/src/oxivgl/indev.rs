@@ -5,18 +5,19 @@
 use core::ptr;
 
 use defmt::info;
+use oxivgl::driver::LvglDriver;
 use oxivgl_sys::{
     lv_display_get_screen_prev, lv_indev_create, lv_indev_data_t, lv_indev_enable, lv_indev_get_active_obj,
-    lv_indev_get_display, lv_indev_get_point, lv_indev_get_read_cb, lv_indev_get_state,
-    lv_indev_set_display, lv_indev_set_mode, lv_indev_set_read_cb, lv_indev_set_type, lv_indev_t,
-    lv_indev_mode_t_LV_INDEV_MODE_TIMER, lv_indev_state_t_LV_INDEV_STATE_PRESSED,
-    lv_indev_state_t_LV_INDEV_STATE_RELEASED, lv_indev_type_t_LV_INDEV_TYPE_POINTER, lv_point_t,
+    lv_indev_get_display, lv_indev_get_point, lv_indev_get_read_cb, lv_indev_get_read_timer, lv_indev_get_state,
+    lv_indev_read, lv_indev_set_display, lv_indev_set_mode, lv_indev_set_read_cb, lv_indev_set_type, lv_indev_t,
+    lv_indev_mode_t_LV_INDEV_MODE_EVENT, lv_indev_state_t_LV_INDEV_STATE_PRESSED,
+    lv_indev_state_t_LV_INDEV_STATE_RELEASED, lv_indev_type_t_LV_INDEV_TYPE_POINTER, lv_point_t, lv_timer_pause,
 };
 
 use crate::oxivgl::display::lvgl_display;
 use crate::oxivgl::touch_dbg;
 
-/// Latest touch sample written by the UI task before `timer_handler()`.
+/// Latest touch sample written by the UI task before [`TouchInput::sync_read`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct TouchSample {
     /// Horizontal coordinate in display pixels.
@@ -58,11 +59,15 @@ impl TouchInput {
             lv_indev_set_display(indev, disp);
             lv_indev_set_read_cb(indev, Some(pointer_read_cb));
             lv_indev_enable(indev, true);
-            // TIMER mode — same as the SDL mouse indev in `examples/oxivgl-host`.
-            // Publish the latest I2C sample via [`publish`] before each
-            // `timer_handler()`; LVGL calls [`pointer_read_cb`] from its indev
-            // read timer during `lv_timer_handler()`.
-            lv_indev_set_mode(indev, lv_indev_mode_t_LV_INDEV_MODE_TIMER);
+            // EVENT mode + explicit [`sync_read`]: the internal read timer is
+            // paused so only our `lv_indev_read()` calls (after `timer_handler`)
+            // feed coordinates. TIMER mode on STM32 did not invoke the read_cb
+            // in sync with publishes (LVGL reported pt=(0,0)).
+            lv_indev_set_mode(indev, lv_indev_mode_t_LV_INDEV_MODE_EVENT);
+            let read_timer = lv_indev_get_read_timer(indev);
+            if !read_timer.is_null() {
+                lv_timer_pause(read_timer);
+            }
 
             let linked_disp = lv_indev_get_display(indev);
             let prev_scr = lv_display_get_screen_prev(disp);
@@ -89,11 +94,38 @@ impl TouchInput {
         }
     }
 
-    /// Log LVGL pointer indev state and update [`touch_dbg`] atomics.
+    /// Push the published sample into LVGL via `lv_indev_read()`.
     ///
-    /// `hit_btn` is the scene-button index whose layout bounds contain the
-    /// sample (if any) — compare with `lv_indev_get_active_obj()` to see whether
-    /// LVGL agrees with manual hit-testing.
+    /// Call **after** `LvglDriver::timer_handler()` so refresh/screen state is
+    /// settled (LVGL blocks input while `disp->prev_scr` is active).
+    pub fn sync_read(&self) {
+        assert!(self.registered, "TouchInput::register() was not called");
+        // SAFETY: UI task only; set in `register`.
+        unsafe {
+            let indev = POINTER_INDEV;
+            if indev.is_null() {
+                return;
+            }
+            lv_indev_read(indev);
+        }
+    }
+
+    /// Publish, run LVGL timers, then explicitly read the pointer indev.
+    pub fn feed(
+        &self,
+        driver: &LvglDriver,
+        sample: TouchSample,
+        hit_btn: Option<usize>,
+    ) {
+        self.publish(sample);
+        driver.timer_handler();
+        self.sync_read();
+        if sample.pressed {
+            self.log_debug(sample, hit_btn);
+        }
+    }
+
+    /// Log LVGL pointer indev state and update [`touch_dbg`] atomics.
     pub fn log_debug(&self, sample: TouchSample, hit_btn: Option<usize>) {
         assert!(self.registered, "TouchInput::register() was not called");
         // SAFETY: UI task only; set in `register`.
@@ -115,12 +147,14 @@ impl TouchInput {
 
             if sample.pressed {
                 info!(
-                    "oxivgl indev pressed state={} pt=({},{}) active_obj={:08x} layout_hit={:?}",
+                    "oxivgl indev pressed state={} pt=({},{}) active_obj={:08x} layout_hit={:?} sample=({},{})",
                     state,
                     pt.x,
                     pt.y,
                     active as u32,
-                    hit_btn
+                    hit_btn,
+                    sample.x,
+                    sample.y
                 );
             }
         }
@@ -132,7 +166,7 @@ unsafe extern "C" fn pointer_read_cb(_indev: *mut lv_indev_t, data: *mut lv_inde
         return;
     }
 
-    // SAFETY: single-task UI loop — see `TouchInput::publish`.
+    // SAFETY: UI task only — see `TouchInput::publish`.
     let sample = unsafe { TOUCH_SAMPLE };
     // SAFETY: `data` is a valid out-parameter from LVGL for the duration of this callback.
     let out = unsafe { &mut *data };
