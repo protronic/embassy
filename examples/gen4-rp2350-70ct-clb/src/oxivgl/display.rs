@@ -1,7 +1,8 @@
-//! PSRAM RGB565 flush for OxivGL / LVGL v9.5 on the gen4-RP2350-70CT-CLB.
+//! PSRAM framebuffer flush for OxivGL / LVGL v9.5 on the gen4-RP2350-70CT-CLB.
 //!
-//! Full-screen buffers live in external PSRAM (8 MiB APS6404L). LVGL partial
-//! stripes stay in on-chip SRAM via [`LvglBuffers`].
+//! Graphics4D path: double-buffered plain RGB565 + explicit present.
+//! Embassy DPI path: single framebuffer with per-row prefix words; the PIO
+//! scan-out task streams continuously (see [`crate::dpi`]).
 
 use core::ffi::c_void;
 use core::ptr;
@@ -16,10 +17,17 @@ use oxivgl_sys::{
     lv_display_render_mode_t_LV_DISPLAY_RENDER_MODE_PARTIAL,
 };
 
-use crate::gen4_board::{self, PsramFramebuffers};
+use crate::gen4_board::PsramFramebuffers;
+
+#[cfg(not(gen4_graphics4d))]
+use crate::dpi::{ROW_BYTES, ROW_PIXEL_OFFSET};
+#[cfg(not(gen4_graphics4d))]
+use crate::gen4_board::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 
 static mut LVGL_DISP: *mut lv_display_t = core::ptr::null_mut();
 static mut FRAME: Option<PsramFramebuffers> = None;
+
+#[cfg(gen4_graphics4d)]
 static mut SHOW_FRONT: bool = false;
 
 static FLUSH_COUNT: AtomicU32 = AtomicU32::new(0);
@@ -63,17 +71,39 @@ fn rgb565(r: u8, g: u8, b: u8) -> u16 {
     ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)
 }
 
-/// Fill both PSRAM framestores with the demo background colour.
+/// Fill the framebuffer(s) with the demo background colour.
 pub fn prefill_background() {
     let px = rgb565(16, 32, 48).to_le_bytes();
     // SAFETY: only the UI task touches PSRAM framestores.
     unsafe {
         if let Some(frame) = FRAME.as_ref() {
+            #[cfg(gen4_graphics4d)]
             for fb in [frame.back, frame.front] {
-                let base = fb;
-                for i in (0..frame.bytes).step_by(2) {
-                    ptr::copy_nonoverlapping(px.as_ptr(), base.add(i), 2);
-                }
+                fill_plain_rgb565(fb, frame.bytes, &px);
+            }
+            #[cfg(not(gen4_graphics4d))]
+            fill_dpi_rgb565(frame.back, &px);
+        }
+    }
+}
+
+#[cfg(gen4_graphics4d)]
+unsafe fn fill_plain_rgb565(fb: *mut u8, bytes: usize, px: &[u8; 2]) {
+    let base = fb;
+    for i in (0..bytes).step_by(2) {
+        ptr::copy_nonoverlapping(px.as_ptr(), base.add(i), 2);
+    }
+}
+
+#[cfg(not(gen4_graphics4d))]
+unsafe fn fill_dpi_rgb565(fb: *mut u8, px: &[u8; 2]) {
+    for row in 0..DISPLAY_HEIGHT {
+        let row_base = unsafe { fb.add(row * ROW_BYTES) };
+        unsafe {
+            ptr::write_bytes(row_base, 0, ROW_PIXEL_OFFSET);
+            for x in 0..DISPLAY_WIDTH {
+                let p = row_base.add(ROW_PIXEL_OFFSET + x * 2);
+                ptr::copy_nonoverlapping(px.as_ptr(), p, 2);
             }
         }
     }
@@ -113,6 +143,7 @@ pub unsafe fn lvgl_disp_init_rgb<const BYTES: usize>(
     }
 }
 
+#[cfg(gen4_graphics4d)]
 /// Copy the visible PSRAM buffer to the back buffer before partial LVGL flushes.
 pub fn sync_back_from_front() {
     // SAFETY: only the UI task touches PSRAM framestores.
@@ -128,24 +159,12 @@ pub fn sync_back_from_front() {
     }
 }
 
-/// Pointer to the PSRAM buffer currently shown (before the next swap).
-pub fn front_framebuffer() -> *const u16 {
-    // SAFETY: only the UI task touches PSRAM framestores.
-    unsafe {
-        FRAME
-            .as_ref()
-            .map(|f| {
-                if SHOW_FRONT {
-                    f.front as *const u16
-                } else {
-                    f.back as *const u16
-                }
-            })
-            .unwrap_or(core::ptr::null())
-    }
-}
+#[cfg(not(gen4_graphics4d))]
+/// No-op: DPI scan-out reads the single framebuffer directly.
+pub fn sync_back_from_front() {}
 
-/// Swap PSRAM buffers and scan the new front buffer out to the RGB panel.
+#[cfg(gen4_graphics4d)]
+/// Swap PSRAM buffers and scan the new front buffer out via Graphics4D.
 pub fn present_framebuffer() {
     // SAFETY: only the UI task touches PSRAM framestores.
     unsafe {
@@ -156,14 +175,20 @@ pub fn present_framebuffer() {
             } else {
                 frame.back as *const u16
             };
-            gen4_board::gen4_lcd_present_rgb565(
+            crate::gen4_board::gen4_lcd_present_rgb565(
                 ptr,
-                gen4_board::DISPLAY_WIDTH as u16,
-                gen4_board::DISPLAY_HEIGHT as u16,
+                crate::gen4_board::DISPLAY_WIDTH as u16,
+                crate::gen4_board::DISPLAY_HEIGHT as u16,
             );
             PRESENT_COUNT.fetch_add(1, Ordering::Relaxed);
         }
     }
+}
+
+#[cfg(not(gen4_graphics4d))]
+/// Count a logical present (DPI scan-out task streams continuously).
+pub fn present_framebuffer() {
+    PRESENT_COUNT.fetch_add(1, Ordering::Relaxed);
 }
 
 unsafe extern "C" fn flush_callback(
@@ -184,38 +209,58 @@ unsafe extern "C" fn flush_callback(
     let w = (area.x2 - area.x1 + 1) as usize;
     let h = (area.y2 - area.y1 + 1) as usize;
     let row_bytes = w * 2;
-    let stride = gen4_board::DISPLAY_WIDTH * 2;
 
     // SAFETY: px_map points at `w*h` RGB565 pixels supplied by LVGL.
     let src = unsafe { slice::from_raw_parts(px_map, row_bytes * h) };
 
-    // SAFETY: back PSRAM buffer is only written from this LVGL flush callback.
+    // SAFETY: PSRAM framebuffer is only written from this LVGL flush callback.
     unsafe {
         let Some(frame) = FRAME.as_ref() else {
             lv_display_flush_ready(disp);
             return;
         };
-        let back = if SHOW_FRONT {
-            frame.back
-        } else {
-            frame.front
-        };
-        for row in 0..h {
-            let y = area.y1 as usize + row;
-            if y >= gen4_board::DISPLAY_HEIGHT {
-                break;
-            }
-            let dst_off = y * stride + area.x1 as usize * 2;
-            let src_off = row * row_bytes;
-            let end = dst_off + row_bytes;
-            if end <= frame.bytes {
-                ptr::copy_nonoverlapping(
-                    src[src_off..].as_ptr(),
-                    back.add(dst_off),
-                    row_bytes,
-                );
+
+        #[cfg(gen4_graphics4d)]
+        {
+            let stride = crate::gen4_board::DISPLAY_WIDTH * 2;
+            let back = if SHOW_FRONT {
+                frame.back
+            } else {
+                frame.front
+            };
+            for row in 0..h {
+                let y = area.y1 as usize + row;
+                if y >= crate::gen4_board::DISPLAY_HEIGHT {
+                    break;
+                }
+                let dst_off = y * stride + area.x1 as usize * 2;
+                let src_off = row * row_bytes;
+                let end = dst_off + row_bytes;
+                if end <= frame.bytes {
+                    ptr::copy_nonoverlapping(
+                        src[src_off..].as_ptr(),
+                        back.add(dst_off),
+                        row_bytes,
+                    );
+                }
             }
         }
+
+        #[cfg(not(gen4_graphics4d))]
+        {
+            let fb = frame.back;
+            for row in 0..h {
+                let y = area.y1 as usize + row;
+                if y >= DISPLAY_HEIGHT {
+                    break;
+                }
+                let x = (area.x1 as usize).min(DISPLAY_WIDTH);
+                let copy = row_bytes.min((DISPLAY_WIDTH - x) * 2);
+                let dst = fb.add(y * ROW_BYTES + ROW_PIXEL_OFFSET + x * 2);
+                ptr::copy_nonoverlapping(src[row * row_bytes..].as_ptr(), dst, copy);
+            }
+        }
+
         FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
         lv_display_flush_ready(disp);
     }

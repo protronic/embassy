@@ -60,12 +60,16 @@ git add vendor/graphics4d-rp2350
 git commit -m "vendor(gen4): update libgraphics4d_rp2350.a"
 ```
 
-Without `vendor/graphics4d-rp2350/lib/libgraphics4d_rp2350.a`, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub — USB log shows:
+Without Graphics4D, Embassy **PIO+DPI scan-out** drives the panel automatically
+(GPIO22..37 data, DE=GPIO18, PCLK=GPIO21 per `board/gen4_rp2350_70ct.h`). USB log:
 
 ```text
-panel: Graphics4D not found — ...
-panel_presents=N   # counter rises, but panel stays blank
+panel: Embassy PIO+DPI scanout (GPIO22..37 data, DE=18, PCLK=21)
+dpi frame=100 busy=... read_offset=...
 ```
+
+Link Graphics4D instead when you have the proprietary library built — it takes
+over scan-out and uses double-buffered plain RGB565 present.
 
 After linking Graphics4D, rebuild, reflash, and confirm:
 

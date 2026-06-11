@@ -144,9 +144,11 @@ fn find_static_lib_recursive(sdk: &Path) -> Option<(PathBuf, &'static str)> {
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
                 continue;
             };
-            if static_lib_names().contains(&name) {
-                let stem = name.strip_prefix("lib").and_then(|s| s.strip_suffix(".a"))?;
-                return Some((path.parent()?.to_path_buf(), stem));
+            for lib_name in static_lib_names() {
+                if name == lib_name {
+                    let stem = lib_name.strip_prefix("lib").and_then(|s| s.strip_suffix(".a"))?;
+                    return Some((path.parent()?.to_path_buf(), stem));
+                }
             }
         }
     }
@@ -255,7 +257,7 @@ fn build_display_driver(manifest_dir: &Path) {
         build_gfx4d_glue(&sdk);
     } else {
         println!(
-            "cargo:warning=Graphics4D not linked — RGB scanout STUB active (blank panel). Run scripts/check-graphics4d.sh"
+            "cargo:warning=Graphics4D not linked — using Embassy PIO+DPI scanout (see src/dpi.rs)"
         );
         diagnose_missing_sdk(manifest_dir);
         build_stub_glue();

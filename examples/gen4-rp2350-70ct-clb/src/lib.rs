@@ -1,6 +1,7 @@
 #![no_std]
 #![allow(static_mut_refs)]
 
+pub mod dpi;
 pub mod gen4_board;
 pub mod usb_log;
 

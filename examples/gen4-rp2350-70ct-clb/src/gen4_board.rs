@@ -6,12 +6,12 @@
 //! - **PSRAM**: APS6404L 8 MiB on QMI CS1 / GPIO0
 //!
 //! Pin assignments follow the Pico SDK board file `board/gen4_rp2350_70ct.h`
-//! (CLB variants use the same GPIO map). RGB scan-out pins are owned by
-//! Graphics4D when linked; Embassy only drives backlight and touch.
+//! (CLB variants use the same GPIO map). When Graphics4D is linked it owns
+//! RGB scan-out; otherwise Embassy PIO+DPI drives the panel (see [`crate::dpi`]).
 
 use defmt::info;
 use embassy_executor::Spawner;
-use log::{info as uinfo, warn as uwarn};
+use log::info as uinfo;
 use embassy_rp::gpio::{Level, Output};
 #[cfg(feature = "touch")]
 use embassy_rp::gpio::{Input, Pull};
@@ -54,37 +54,84 @@ pub const DISPLAY_HEIGHT: usize = 480;
 #[cfg(feature = "touch")]
 pub const TOUCH_I2C_ADDR: u8 = 0x38;
 
+#[cfg(gen4_graphics4d)]
 const FB_BYTES: usize = DISPLAY_WIDTH * DISPLAY_HEIGHT * 2;
+#[cfg(not(gen4_graphics4d))]
+const FB_BYTES: usize = crate::dpi::FRAME_BYTES;
 
-/// PSRAM-backed RGB565 framestores for LVGL / panel scanout.
+/// PSRAM-backed framestores for LVGL / panel scanout.
 pub struct PsramFramebuffers {
     pub back: *mut u8,
+    #[cfg(gen4_graphics4d)]
     pub front: *mut u8,
     pub bytes: usize,
 }
 
 impl PsramFramebuffers {
-    /// Reserve two full-screen RGB565 buffers at the base of PSRAM.
+    /// Reserve framebuffer(s) at the base of PSRAM.
+    ///
+    /// Graphics4D uses two plain RGB565 buffers; Embassy DPI uses one buffer
+    /// with per-row prefix words (see [`crate::dpi`]).
     ///
     /// # Safety
     /// `psram` must be initialised and `base_address()` must stay valid.
     pub unsafe fn new(psram: &Psram<'_>) -> Option<Self> {
         let base = psram.base_address();
         let total = psram.size() as usize;
-        if total < FB_BYTES * 2 {
-            return None;
+        #[cfg(gen4_graphics4d)]
+        {
+            if total < FB_BYTES * 2 {
+                return None;
+            }
+            Some(Self {
+                back: base.cast::<u8>(),
+                front: base.wrapping_add(FB_BYTES).cast::<u8>(),
+                bytes: FB_BYTES,
+            })
         }
-        Some(Self {
-            back: base.cast::<u8>(),
-            front: base.wrapping_add(FB_BYTES).cast::<u8>(),
-            bytes: FB_BYTES,
-        })
+        #[cfg(not(gen4_graphics4d))]
+        {
+            if total < FB_BYTES {
+                return None;
+            }
+            Some(Self {
+                back: base.cast::<u8>(),
+                bytes: FB_BYTES,
+            })
+        }
     }
+}
+
+/// PIO/DMA peripherals for Embassy DPI scan-out (when Graphics4D is not linked).
+#[cfg(not(gen4_graphics4d))]
+pub struct DpiPeripherals {
+    pub pio0: Peri<'static, peripherals::PIO0>,
+    pub dma_ch0: Peri<'static, peripherals::DMA_CH0>,
+    pub de: Peri<'static, peripherals::PIN_18>,
+    pub pclk: Peri<'static, peripherals::PIN_21>,
+    pub d0: Peri<'static, peripherals::PIN_22>,
+    pub d1: Peri<'static, peripherals::PIN_23>,
+    pub d2: Peri<'static, peripherals::PIN_24>,
+    pub d3: Peri<'static, peripherals::PIN_25>,
+    pub d4: Peri<'static, peripherals::PIN_26>,
+    pub d5: Peri<'static, peripherals::PIN_27>,
+    pub d6: Peri<'static, peripherals::PIN_28>,
+    pub d7: Peri<'static, peripherals::PIN_29>,
+    pub d8: Peri<'static, peripherals::PIN_30>,
+    pub d9: Peri<'static, peripherals::PIN_31>,
+    pub d10: Peri<'static, peripherals::PIN_32>,
+    pub d11: Peri<'static, peripherals::PIN_33>,
+    pub d12: Peri<'static, peripherals::PIN_34>,
+    pub d13: Peri<'static, peripherals::PIN_35>,
+    pub d14: Peri<'static, peripherals::PIN_36>,
+    pub d15: Peri<'static, peripherals::PIN_37>,
 }
 
 pub struct DisplayResources {
     pub psram: Psram<'static>,
     pub framebuffers: PsramFramebuffers,
+    #[cfg(not(gen4_graphics4d))]
+    pub dpi: Option<DpiPeripherals>,
     #[cfg(feature = "touch")]
     pub i2c: I2c<'static, peripherals::I2C1, Blocking>,
 }
@@ -94,9 +141,7 @@ pub fn log_panel_driver_status() {
     #[cfg(gen4_graphics4d)]
     uinfo!("panel: Graphics4D linked — RGB scanout active");
     #[cfg(not(gen4_graphics4d))]
-    uwarn!(
-        "panel: Graphics4D not found — run scripts/init-graphics4d-pico.sh or set GEN4_GRAPHICS4D_SDK; display stays blank"
-    );
+    uinfo!("panel: Embassy PIO+DPI scanout (GPIO22..37 data, DE=18, PCLK=21)");
 }
 
 /// Initialise PSRAM, panel, backlight, USB logging, and optional FT5446 touch.
@@ -107,6 +152,50 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         PIN_0,
         PIN_17,
         PWM_SLICE0,
+        #[cfg(not(gen4_graphics4d))]
+        PIO0,
+        #[cfg(not(gen4_graphics4d))]
+        DMA_CH0,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_18,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_19,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_20,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_21,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_22,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_23,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_24,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_25,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_26,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_27,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_28,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_29,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_30,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_31,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_32,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_33,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_34,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_35,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_36,
+        #[cfg(not(gen4_graphics4d))]
+        PIN_37,
         #[cfg(feature = "touch")]
         PIN_38,
         #[cfg(feature = "touch")]
@@ -139,8 +228,16 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
 
     // SAFETY: PSRAM is mapped and sized by the driver.
     let framebuffers = unsafe { PsramFramebuffers::new(&psram)? };
+    #[cfg(gen4_graphics4d)]
     uinfo!(
         "board init: framebuffers {}x{} RGB565 x2 ({} KiB each)",
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+        FB_BYTES / 1024
+    );
+    #[cfg(not(gen4_graphics4d))]
+    uinfo!(
+        "board init: framebuffer {}x{} DPI ({} KiB)",
         DISPLAY_WIDTH,
         DISPLAY_HEIGHT,
         FB_BYTES / 1024
@@ -156,13 +253,22 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
     init_backlight(PWM_SLICE0, PIN_17);
     uinfo!("board init: backlight PWM on GPIO{}", pins::LCD_BACKLIGHT);
 
-    // Panel reset and RGB PIO timing are handled inside Graphics4D::Initialize().
-    // SAFETY: C shim may call into Graphics4D when the SDK is linked.
-    unsafe {
-        gen4_lcd_init();
-        gen4_lcd_backlight_enable();
+    #[cfg(gen4_graphics4d)]
+    {
+        // Panel reset and RGB PIO timing are handled inside Graphics4D::Initialize().
+        // SAFETY: C shim may call into Graphics4D when the SDK is linked.
+        unsafe {
+            gen4_lcd_init();
+            gen4_lcd_backlight_enable();
+        }
+        uinfo!("board init: gen4_lcd_init() returned");
     }
-    uinfo!("board init: gen4_lcd_init() returned");
+
+    #[cfg(not(gen4_graphics4d))]
+    {
+        let _sync = park_sync_pins(PIN_20, PIN_19);
+        uinfo!("board init: HSYNC/VSYNC parked (DE-only mode)");
+    }
 
     #[cfg(feature = "touch")]
     {
@@ -178,6 +284,11 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         return Some(DisplayResources {
             psram,
             framebuffers,
+            #[cfg(not(gen4_graphics4d))]
+            dpi: Some(make_dpi_peripherals(
+                PIO0, DMA_CH0, PIN_18, PIN_21, PIN_22, PIN_23, PIN_24, PIN_25, PIN_26, PIN_27,
+                PIN_28, PIN_29, PIN_30, PIN_31, PIN_32, PIN_33, PIN_34, PIN_35, PIN_36, PIN_37,
+            )),
             i2c,
         });
     }
@@ -188,8 +299,69 @@ pub async fn init(spawner: &Spawner, p: Peripherals) -> Option<DisplayResources>
         Some(DisplayResources {
             psram,
             framebuffers,
+            #[cfg(not(gen4_graphics4d))]
+            dpi: Some(make_dpi_peripherals(
+                PIO0, DMA_CH0, PIN_18, PIN_21, PIN_22, PIN_23, PIN_24, PIN_25, PIN_26, PIN_27,
+                PIN_28, PIN_29, PIN_30, PIN_31, PIN_32, PIN_33, PIN_34, PIN_35, PIN_36, PIN_37,
+            )),
         })
     }
+}
+
+#[cfg(not(gen4_graphics4d))]
+fn make_dpi_peripherals(
+    pio0: Peri<'static, peripherals::PIO0>,
+    dma_ch0: Peri<'static, peripherals::DMA_CH0>,
+    de: Peri<'static, peripherals::PIN_18>,
+    pclk: Peri<'static, peripherals::PIN_21>,
+    d0: Peri<'static, peripherals::PIN_22>,
+    d1: Peri<'static, peripherals::PIN_23>,
+    d2: Peri<'static, peripherals::PIN_24>,
+    d3: Peri<'static, peripherals::PIN_25>,
+    d4: Peri<'static, peripherals::PIN_26>,
+    d5: Peri<'static, peripherals::PIN_27>,
+    d6: Peri<'static, peripherals::PIN_28>,
+    d7: Peri<'static, peripherals::PIN_29>,
+    d8: Peri<'static, peripherals::PIN_30>,
+    d9: Peri<'static, peripherals::PIN_31>,
+    d10: Peri<'static, peripherals::PIN_32>,
+    d11: Peri<'static, peripherals::PIN_33>,
+    d12: Peri<'static, peripherals::PIN_34>,
+    d13: Peri<'static, peripherals::PIN_35>,
+    d14: Peri<'static, peripherals::PIN_36>,
+    d15: Peri<'static, peripherals::PIN_37>,
+) -> DpiPeripherals {
+    DpiPeripherals {
+        pio0,
+        dma_ch0,
+        de,
+        pclk,
+        d0,
+        d1,
+        d2,
+        d3,
+        d4,
+        d5,
+        d6,
+        d7,
+        d8,
+        d9,
+        d10,
+        d11,
+        d12,
+        d13,
+        d14,
+        d15,
+    }
+}
+
+/// Park HSYNC/VSYNC at inactive (high) — DE-only sync mode.
+#[cfg(not(gen4_graphics4d))]
+pub fn park_sync_pins(
+    hsync: Peri<'static, peripherals::PIN_20>,
+    vsync: Peri<'static, peripherals::PIN_19>,
+) -> (Output<'static>, Output<'static>) {
+    (Output::new(hsync, Level::High), Output::new(vsync, Level::High))
 }
 
 #[cfg(feature = "touch")]
@@ -262,8 +434,12 @@ pub fn read_touch(i2c: &mut I2c<'static, peripherals::I2C1, Blocking>) -> TouchP
     }
 }
 
+#[cfg(gen4_graphics4d)]
 unsafe extern "C" {
     fn gen4_lcd_init();
     fn gen4_lcd_backlight_enable();
+}
+
+unsafe extern "C" {
     pub fn gen4_lcd_present_rgb565(pixels: *const u16, width: u16, height: u16);
 }
