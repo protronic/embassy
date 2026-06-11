@@ -1,2 +1,4 @@
-# Cloned separately — see scripts/init-graphics4d-pico.sh
+# Full Graphics4D-pico source clone (build input, not committed).
 /vendor/Graphics4D-pico/
+
+# vendor/graphics4d-rp2350/ IS committed (prebuilt lib + headers).

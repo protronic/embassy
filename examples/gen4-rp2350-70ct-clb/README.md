@@ -37,22 +37,30 @@ cargo run --bin oxivgl_widget_demo --features oxivgl
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-## RGB panel scanout (Graphics4D-pico)
+## RGB panel scanout (Graphics4D)
 
-The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver from Workshop5. Clone the companion library into `vendor/Graphics4D-pico`:
+The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver from Workshop5.
+
+**Normal workflow:** `vendor/graphics4d-rp2350/` in this repo contains the prebuilt `libgraphics4d_rp2350.a` + headers — no local Graphics4D build needed:
 
 ```bash
 cd examples/gen4-rp2350-70ct-clb
-./scripts/init-graphics4d-pico.sh          # or use your existing vendor/Graphics4D-pico clone
-export PICO_SDK_PATH=~/pico/pico-sdk       # Pico SDK 2.x
-./scripts/build-graphics4d-lib.sh          # if the repo has sources but no .a yet
 ./scripts/check-graphics4d.sh
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-The init script clones [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico). Many Workshop5 exports ship **`src/Graphics4D.h` + C++ sources** without a prebuilt Linux archive — `build-graphics4d-lib.sh` compiles `lib/libgraphics4d_rp2350.a` using the Pico SDK (or runs `embassy/build.sh` / CMake when present).
+**Regenerate the vendored library** (maintainers, once per Graphics4D-pico update):
 
-The Embassy build needs **`Graphics4D.h`** and **`libgraphics4d_rp2350.a`** under the SDK root. Without them, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub — USB log shows:
+```bash
+sudo pacman -S cmake ninja arm-none-eabi-gcc pico-sdk
+export PICO_SDK_PATH=/usr/share/pico-sdk
+export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico
+./scripts/vendor-graphics4d-into-repo.sh
+git add vendor/graphics4d-rp2350
+git commit -m "vendor(gen4): update libgraphics4d_rp2350.a"
+```
+
+Without `vendor/graphics4d-rp2350/lib/libgraphics4d_rp2350.a`, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub — USB log shows:
 
 ```text
 panel: Graphics4D not found — ...

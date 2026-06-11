@@ -9,6 +9,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CRATE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+PREBUILT="${CRATE_DIR}/vendor/graphics4d-rp2350"
 VENDOR="${CRATE_DIR}/vendor/Graphics4D-pico"
 
 ok() { printf '  OK   %s\n' "$1"; }
@@ -96,6 +97,10 @@ if [[ -n "${GEN4_GRAPHICS4D_SDK:-}" ]]; then
     echo
 fi
 
+if check_root "${PREBUILT}" "vendor/graphics4d-rp2350 (committed)"; then
+    status=0
+fi
+
 if check_root "${VENDOR}" "vendor/Graphics4D-pico"; then
     status=0
 fi
@@ -108,10 +113,12 @@ if [[ "${status}" -eq 0 ]]; then
 else
     echo "Graphics4D NOT ready — current firmware uses the scanout STUB (blank panel)."
     echo
-    echo "Your tree has headers but no libgraphics4d_rp2350.a yet. Typical fix:"
-    echo "  export PICO_SDK_PATH=~/pico/pico-sdk    # Pico SDK 2.x"
-    echo "  export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico   # optional"
-    echo "  ./scripts/build-graphics4d-lib.sh"
+    echo "Build once and vendor the .a into this repo (Arch/CachyOS):"
+    echo "  sudo pacman -S cmake ninja arm-none-eabi-gcc pico-sdk"
+    echo "  export PICO_SDK_PATH=/usr/share/pico-sdk"
+    echo "  export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico"
+    echo "  ./scripts/vendor-graphics4d-into-repo.sh"
+    echo "  git add vendor/graphics4d-rp2350 && git commit"
     echo "  ./scripts/check-graphics4d.sh"
     echo "  cargo build --bin oxivgl_widget_demo --features oxivgl,touch"
     echo

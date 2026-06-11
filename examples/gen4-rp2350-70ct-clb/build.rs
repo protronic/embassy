@@ -1,10 +1,10 @@
 //! Build script for gen4-RP2350-70CT-CLB examples.
 //!
 //! RGB panel scan-out is provided by 4D Systems' proprietary **Graphics4D**
-//! library. By default we look for it in `vendor/Graphics4D-pico`
-//! (clone via `scripts/init-graphics4d-pico.sh`).
-//! Override with `GEN4_GRAPHICS4D_SDK` if the library lives elsewhere
-//! (e.g. a local Workshop5 install).
+//! library. Resolution order:
+//! 1. `GEN4_GRAPHICS4D_SDK` env override
+//! 2. `vendor/graphics4d-rp2350/` — prebuilt lib committed in this repo
+//! 3. `vendor/Graphics4D-pico/` — local source clone + `build-graphics4d-lib.sh`
 
 use std::env;
 use std::fs::File;
@@ -30,6 +30,10 @@ fn main() {
     println!("cargo:rerun-if-env-changed=GEN4_GRAPHICS4D_SDK");
     println!(
         "cargo:rerun-if-changed={}",
+        manifest_dir.join("vendor/graphics4d-rp2350").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
         manifest_dir.join("vendor/Graphics4D-pico").display()
     );
 
@@ -52,6 +56,11 @@ fn resolve_graphics4d_sdk(manifest_dir: &Path) -> Option<PathBuf> {
             sdk.display()
         );
         return None;
+    }
+
+    let prebuilt = manifest_dir.join("vendor/graphics4d-rp2350");
+    if validate_sdk_root(&prebuilt) {
+        return Some(prebuilt);
     }
 
     let vendor = manifest_dir.join("vendor/Graphics4D-pico");
@@ -193,6 +202,22 @@ fn diagnose_missing_sdk(manifest_dir: &Path) {
             }
         }
         return;
+    }
+
+    let prebuilt = manifest_dir.join("vendor/graphics4d-rp2350");
+    if prebuilt.is_dir() && !validate_sdk_root(&prebuilt) {
+        if graphics4d_header(&prebuilt).is_none() {
+            println!(
+                "cargo:warning={} exists but Graphics4D.h is missing",
+                prebuilt.display()
+            );
+        }
+        if find_static_lib(&prebuilt).is_none() {
+            println!(
+                "cargo:warning={} exists but libgraphics4d_rp2350.a is missing — run scripts/vendor-graphics4d-into-repo.sh",
+                prebuilt.display()
+            );
+        }
     }
 
     let vendor = manifest_dir.join("vendor/Graphics4D-pico");
