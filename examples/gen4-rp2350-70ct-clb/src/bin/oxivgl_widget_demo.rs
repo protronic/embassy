@@ -86,7 +86,7 @@ async fn heartbeat_info_task() -> ! {
         #[cfg(not(gen4_graphics4d))]
         if !warned_stub && presents > 0 {
             uinfo!(
-                "NOTE: blank display is expected — panel_presents calls a STUB (no pixels to LCD). Set GEN4_GRAPHICS4D_SDK from Workshop5 for scanout."
+                "NOTE: blank display is expected — panel_presents is a STUB. Run: git submodule update --init vendor/Graphics4D-pico"
             );
             warned_stub = true;
         }

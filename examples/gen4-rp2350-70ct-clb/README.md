@@ -25,7 +25,7 @@ Examples for the **4D Systems gen4-RP2350-70CT-CLB** intelligent display module 
 3. For OxivGL builds:
 
    - `arm-none-eabi-gcc` and `libnewlib-arm-none-eabi`
-   - Optional: Workshop5 **Graphics4D** SDK path for live RGB panel scanout (see below)
+   - **Graphics4D** from [protronic/Graphics4D-pico](https://github.com/protronic/Graphics4D-pico) for live RGB panel scanout (see below)
 
 ## OxivGL widget demo
 
@@ -37,22 +37,37 @@ cargo run --bin oxivgl_widget_demo --features oxivgl
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-### RGB panel scanout (Graphics4D)
+## RGB panel scanout (Graphics4D-pico)
 
-The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver inside Workshop5. By default this example links a small C shim that:
+The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** PIO driver from Workshop5. This example links it via the git submodule:
 
-- Initialises panel reset / backlight from Rust
-- Renders LVGL into **PSRAM** double buffers
-- Calls a no-op `gen4_lcd_present_rgb565()` stub so the crate builds in CI without Workshop5
+```bash
+# once, from the embassy repo root:
+git submodule update --init examples/gen4-rp2350-70ct-clb/vendor/Graphics4D-pico
 
-To link the real Graphics4D scanout library from a local Workshop5 / Pico SDK install:
+cd examples/gen4-rp2350-70ct-clb
+cargo run --bin oxivgl_widget_demo --features oxivgl,touch
+```
+
+The build script looks for `include/Graphics4D.h` and `lib/libgraphics4d_rp2350.a` inside `vendor/Graphics4D-pico`. Without it, LVGL still renders into PSRAM but `gen4_lcd_present_rgb565()` is a no-op stub (blank panel).
+
+### Workshop5 / local SDK override
 
 ```bash
 export GEN4_GRAPHICS4D_SDK=/path/to/workshop5/graphics4d-rp2350
 cargo run --bin oxivgl_widget_demo --features oxivgl,touch
 ```
 
-Point `GEN4_GRAPHICS4D_SDK` at the directory that contains `include/` and `lib/libgraphics4d_rp2350.a` from your Workshop5 installation.
+If Graphics4D was built against the Pico SDK, also set `PICO_SDK_PATH`.
+
+### Optional Embassy glue inside Graphics4D-pico
+
+The submodule may ship Embassy-specific files:
+
+| Path | Purpose |
+|------|---------|
+| `embassy/gen4_lcd_glue.cpp` | Replaces the default glue in `c/display_gfx4d.cpp` |
+| `embassy/link.txt` | Extra linker arguments (Pico SDK libs, etc.) |
 
 ## Memory layout
 
@@ -78,7 +93,7 @@ RGB data / sync pins are wired internally on the module and are configured insid
 
 ## Troubleshooting
 
-- **Blank screen without Graphics4D**: expected with the default stub — LVGL still runs; set `GEN4_GRAPHICS4D_SDK` for hardware scanout.
+- **Blank screen without Graphics4D**: expected with the default stub — run `git submodule update --init vendor/Graphics4D-pico` or set `GEN4_GRAPHICS4D_SDK`.
 - **PSRAM init fails**: verify you are targeting RP2350B (`rp235xb` feature) and APS6404L is populated.
 - **Touch coordinates inverted**: adjust the axis flip in `gen4_board::read_touch()` for your mounting orientation.
 

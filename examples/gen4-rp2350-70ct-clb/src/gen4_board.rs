@@ -16,7 +16,7 @@ use embassy_rp::gpio::{Level, Output};
 use embassy_rp::gpio::{Input, Pull};
 #[cfg(feature = "touch")]
 use embassy_rp::i2c::{Blocking, Config as I2cConfig, I2c};
-use embassy_rp::peripherals::{self, PIN_17, PIN_37, PWM_SLICE0};
+use embassy_rp::peripherals::{self as peripherals, PIN_17, PIN_37, PWM_SLICE0};
 #[cfg(feature = "touch")]
 use embassy_rp::peripherals::PIN_47;
 use embassy_rp::psram::{self, Psram};
@@ -68,13 +68,13 @@ pub struct DisplayResources {
     pub i2c: I2c<'static, peripherals::I2C1, Blocking>,
 }
 
-/// Log whether the Graphics4D panel driver is linked (needs `GEN4_GRAPHICS4D_SDK`).
+/// Log whether the Graphics4D panel driver is linked.
 pub fn log_panel_driver_status() {
     #[cfg(gen4_graphics4d)]
-    uinfo!("panel: Graphics4D SDK linked — RGB scanout active");
+    uinfo!("panel: Graphics4D linked — RGB scanout active");
     #[cfg(not(gen4_graphics4d))]
     uwarn!(
-        "panel: GEN4_GRAPHICS4D_SDK not set — gen4_lcd_present_rgb565() is a STUB; display stays blank"
+        "panel: Graphics4D not found — init submodule vendor/Graphics4D-pico or set GEN4_GRAPHICS4D_SDK; display stays blank"
     );
 }
 
