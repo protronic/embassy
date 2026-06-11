@@ -196,13 +196,42 @@ export PICO_SDK_PATH=/tmp/pico-sdk     # or /usr/share/pico-sdk on Arch
 This builds, vendors into `vendor/graphics4d-rp2350/`, runs `cargo check`, and
 commits + pushes the `.a`.
 
-## Install vendored lib into Embassy (manual)
+## Use in Embassy OxivGL demo (agent quick path)
+
+### A) Build from sources
 
 ```bash
-cd examples/gen4-rp2350-70ct-clb
 export GEN4_GRAPHICS4D_SDK=/path/to/Graphics4D-pico
+cd embassy/examples/gen4-rp2350-70ct-clb   # branch cursor/gen4-rp2350-70ct-clb-36d2
 ./scripts/vendor-graphics4d-into-repo.sh
+cargo build --bin oxivgl_widget_demo --features oxivgl,touch
+```
+
+### B) Prebuilt release tag (no compile)
+
+In **Graphics4D-pico** repo:
+
+```bash
+git fetch --tags origin
+git checkout libgraphics4d-rp2350-20250611
+export GEN4_GRAPHICS4D_SDK=$PWD
+```
+
+In **Embassy** example:
+
+```bash
+cd embassy/examples/gen4-rp2350-70ct-clb
+INSTALL_ONLY=1 ./scripts/vendor-graphics4d-into-repo.sh
+# equivalent: ./scripts/install-graphics4d-from-sdk.sh
 ./scripts/check-graphics4d.sh
+cargo build --bin oxivgl_widget_demo --features oxivgl,touch
+```
+
+Expected: `panel: Graphics4D linked — RGB scanout active` after flash.
+
+### C) Vendor into git (maintainers)
+
+```bash
 ./scripts/commit-vendored-graphics4d.sh
 ```
 

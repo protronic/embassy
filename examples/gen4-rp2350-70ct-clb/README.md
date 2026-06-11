@@ -43,7 +43,35 @@ The on-module RGB interface is driven by 4D Systems' proprietary **Graphics4D** 
 
 **Default:** Embassy PIO+DPI scan-out works without Graphics4D (see `src/dpi.rs`).
 
-**Optional Graphics4D:** `vendor/graphics4d-rp2350/` should contain the prebuilt `libgraphics4d_rp2350.a` + headers. That archive is **not in git yet**.
+**Optional Graphics4D:** link `libgraphics4d_rp2350.a` for hardware-accelerated panel scan-out (LVGL still draws the UI; Graphics4D only presents frames).
+
+### Quick start — use in Embassy OxivGL demo
+
+**Build from Graphics4D-pico sources:**
+
+```bash
+export GEN4_GRAPHICS4D_SDK=/path/to/Graphics4D-pico
+cd embassy/examples/gen4-rp2350-70ct-clb   # branch cursor/gen4-rp2350-70ct-clb-36d2
+./scripts/vendor-graphics4d-into-repo.sh
+cargo build --bin oxivgl_widget_demo --features oxivgl,touch
+```
+
+**Or download the prebuilt library only** (Graphics4D-pico release tag):
+
+```bash
+cd /path/to/Graphics4D-pico
+git fetch --tags origin
+git checkout libgraphics4d-rp2350-20250611
+
+export GEN4_GRAPHICS4D_SDK=$PWD
+cd embassy/examples/gen4-rp2350-70ct-clb
+INSTALL_ONLY=1 ./scripts/vendor-graphics4d-into-repo.sh
+# or: ./scripts/install-graphics4d-from-sdk.sh
+
+cargo build --bin oxivgl_widget_demo --features oxivgl,touch
+```
+
+USB log should show `panel: Graphics4D linked — RGB scanout active`.
 
 ### Build worker (cloud agent or CI)
 

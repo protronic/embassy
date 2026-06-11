@@ -114,7 +114,12 @@ else
     echo "Graphics4D NOT ready — firmware uses Embassy PIO+DPI scanout (src/dpi.rs)."
     echo "To link Graphics4D instead, vendor libgraphics4d_rp2350.a (see below)."
     echo
-    echo "Build once and vendor the .a into this repo (Arch/CachyOS):"
+    echo "Prebuilt tag (Graphics4D-pico repo, no compile):"
+    echo "  git fetch --tags origin && git checkout libgraphics4d-rp2350-20250611"
+    echo "  export GEN4_GRAPHICS4D_SDK=\$PWD"
+    echo "  INSTALL_ONLY=1 ./scripts/vendor-graphics4d-into-repo.sh"
+    echo
+    echo "Or build from sources (Arch/CachyOS):"
     echo "  sudo pacman -S cmake ninja arm-none-eabi-gcc pico-sdk"
     echo "  export PICO_SDK_PATH=/usr/share/pico-sdk"
     echo "  export GEN4_GRAPHICS4D_SDK=./vendor/Graphics4D-pico"

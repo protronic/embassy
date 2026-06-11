@@ -21,41 +21,20 @@ CRATE_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SDK="${GEN4_GRAPHICS4D_SDK:-${CRATE_DIR}/vendor/Graphics4D-pico}"
 DEST="${CRATE_DIR}/vendor/graphics4d-rp2350"
 
-echo "=== 1/3 build static library ==="
-bash "${SCRIPT_DIR}/build-graphics4d-lib.sh"
-
 SDK="$(cd "${SDK}" && pwd)"
-LIB_SRC="${SDK}/lib/libgraphics4d_rp2350.a"
-[[ -f "${LIB_SRC}" ]] || { echo "error: ${LIB_SRC} missing after build" >&2; exit 1; }
+export GEN4_GRAPHICS4D_SDK="${SDK}"
 
-echo "=== 2/3 install into ${DEST} ==="
-rm -rf "${DEST}"
-mkdir -p "${DEST}/lib" "${DEST}/include"
-
-cp -f "${LIB_SRC}" "${DEST}/lib/libgraphics4d_rp2350.a"
-
-# Copy public headers (Graphics4D.h pulls in others from src/).
-while IFS= read -r -d '' hdr; do
-    rel="${hdr#${SDK}/}"
-    case "${rel}" in
-        src/*) rel="${rel#src/}" ;;
-        include/*) rel="${rel#include/}" ;;
-        *) continue ;;
-    esac
-    install -D -m 0644 "${hdr}" "${DEST}/include/${rel}"
-done < <(find "${SDK}" \( -path "${SDK}/src/*.h" -o -path "${SDK}/include/*.h" \) -print0 2>/dev/null)
-
-if [[ ! -f "${DEST}/include/Graphics4D.h" ]]; then
-    cp -f "${SDK}/src/Graphics4D.h" "${DEST}/include/Graphics4D.h"
+if [[ "${INSTALL_ONLY:-0}" == "1" ]]; then
+    echo "=== install only (INSTALL_ONLY=1) ==="
+    bash "${SCRIPT_DIR}/install-graphics4d-from-sdk.sh"
+else
+    echo "=== 1/2 build static library ==="
+    bash "${SCRIPT_DIR}/build-graphics4d-lib.sh"
+    echo "=== 2/2 install into vendor tree ==="
+    bash "${SCRIPT_DIR}/install-graphics4d-from-sdk.sh"
 fi
 
-cat > "${DEST}/BUILD_INFO.txt" <<EOF
-built_utc=$(date -u +%Y-%m-%dT%H:%MZ)
-source=${SDK}
-host=$(uname -n)
-EOF
-
-echo "=== 3/3 done ==="
+echo "=== done ==="
 ls -lh "${DEST}/lib/libgraphics4d_rp2350.a"
 echo
 echo "Commit into embassy:"

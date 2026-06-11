@@ -4,8 +4,16 @@ Prebuilt scan-out library for the gen4-RP2350-70CT-CLB Embassy example.
 
 ## Status
 
-**`lib/libgraphics4d_rp2350.a` is NOT in git yet** — only this README was committed so far.
-The cloud agent cannot build it (`protronic/Graphics4D-pico` is private).
+Install a prebuilt archive here, or build from Graphics4D-pico sources.
+
+**Prebuilt release** (Graphics4D-pico repo):
+
+```bash
+git fetch --tags origin
+git checkout libgraphics4d-rp2350-20250611
+export GEN4_GRAPHICS4D_SDK=$PWD
+/path/to/embassy/examples/gen4-rp2350-70ct-clb/scripts/install-graphics4d-from-sdk.sh
+```
 
 Without the `.a`, the example uses **Embassy PIO+DPI scan-out** (`src/dpi.rs`) automatically.
 
