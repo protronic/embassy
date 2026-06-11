@@ -115,8 +115,12 @@ else
     echo "  ./scripts/check-graphics4d.sh"
     echo "  cargo build --bin oxivgl_widget_demo --features oxivgl,touch"
     echo
-    echo "Or copy a prebuilt libgraphics4d_rp2350.a from Workshop5 on Windows into:"
-    echo "  vendor/Graphics4D-pico/lib/"
+    echo "Diagnose your tree:"
+    echo "  ./scripts/inspect-graphics4d-pico.sh"
+    echo
+    echo "Windows (Workshop5): after compiling any RP2350 project:"
+    echo "  powershell -File scripts/find-graphics4d-lib.ps1"
+    echo "  copy found .a -> vendor/Graphics4D-pico/lib/libgraphics4d_rp2350.a"
 fi
 
 exit "${status}"

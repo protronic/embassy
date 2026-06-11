@@ -184,7 +184,13 @@ fn diagnose_missing_sdk(manifest_dir: &Path) {
             println!("cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} — Graphics4D.h not found");
         }
         if find_static_lib(&path).is_none() {
-            println!("cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} — libgraphics4d_rp2350.a not found");
+            if has_graphics4d_sources(&path) {
+                println!(
+                    "cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} — sources found but libgraphics4d_rp2350.a missing; run scripts/build-graphics4d-lib.sh"
+                );
+            } else {
+                println!("cargo:warning=GEN4_GRAPHICS4D_SDK={sdk} — libgraphics4d_rp2350.a not found");
+            }
         }
         return;
     }
@@ -198,10 +204,17 @@ fn diagnose_missing_sdk(manifest_dir: &Path) {
             );
         }
         if find_static_lib(&vendor).is_none() {
-            println!(
-                "cargo:warning={} exists but libgraphics4d_rp2350.a is missing",
-                vendor.display()
-            );
+            if has_graphics4d_sources(&vendor) {
+                println!(
+                    "cargo:warning={} has Graphics4D sources but no libgraphics4d_rp2350.a — run scripts/build-graphics4d-lib.sh (needs PICO_SDK_PATH)",
+                    vendor.display()
+                );
+            } else {
+                println!(
+                    "cargo:warning={} exists but libgraphics4d_rp2350.a is missing",
+                    vendor.display()
+                );
+            }
         }
     } else {
         println!(

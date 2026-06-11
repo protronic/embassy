@@ -46,6 +46,27 @@ if [[ -f "${SDK}/embassy/build.sh" ]]; then
     exit 0
 fi
 
+EMBASSY_CMAKE="${CRATE_DIR}/cmake/graphics4d-lib"
+if [[ -d "${EMBASSY_CMAKE}" ]] && command -v cmake >/dev/null; then
+    BUILD_DIR="${SDK}/build-embassy-cmake"
+    TOOLCHAIN="${PICO_SDK_PATH}/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
+    [[ -f "${TOOLCHAIN}" ]] || die "Pico toolchain file missing: ${TOOLCHAIN}"
+
+    echo "CMake build (embassy wrapper) in ${BUILD_DIR} ..."
+    cmake -S "${EMBASSY_CMAKE}" -B "${BUILD_DIR}" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN}" \
+        -DPICO_SDK_PATH="${PICO_SDK_PATH}" \
+        -DPICO_BOARD="${PICO_BOARD}"
+    env GRAPHICS4D_SDK="${SDK}" cmake --build "${BUILD_DIR}"
+
+    mapfile -t BUILT < <(find "${BUILD_DIR}" -name 'libgraphics4d_rp2350.a' 2>/dev/null)
+    [[ ${#BUILT[@]} -gt 0 ]] || die "CMake wrapper build produced no libgraphics4d_rp2350.a"
+    cp -f "${BUILT[0]}" "${LIB_OUT}"
+    echo "Built ${LIB_OUT} (from ${BUILT[0]})"
+    exit 0
+fi
+
 if [[ -f "${SDK}/CMakeLists.txt" ]] && command -v cmake >/dev/null; then
     BUILD_DIR="${SDK}/build-embassy"
     TOOLCHAIN="${PICO_SDK_PATH}/cmake/preload/toolchains/pico_arm_cortex_m33_gcc.cmake"
