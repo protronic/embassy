@@ -10,13 +10,15 @@ use core::slice;
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
 use embassy_rp2350_touch_lcd_7_examples::board::{self, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use embassy_rp2350_touch_lcd_7_examples::usb_monitor;
+use embassy_time::Timer;
 use embassy_rp2350_touch_lcd_7_examples::oxivgl::display;
 use embassy_rp2350_touch_lcd_7_examples::oxivgl::platform::{self, LVGL_BUF_BYTES};
 use embassy_rp2350_touch_lcd_7_examples::oxivgl::touch_feed;
 use embassy_rp2350_touch_lcd_7_examples::pio_rgb;
 use embedded_alloc::LlffHeap as Heap;
 use oxivgl::display::LvglBuffers;
-use {defmt_rtt as _, panic_probe as _};
+use {panic_probe as _};
 
 const HEAP_SIZE: usize = 256 * 1024;
 
@@ -42,6 +44,8 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let p = board::init();
+    usb_monitor::spawn(&spawner, p.USB);
+    Timer::after_millis(200).await;
     board::log_board_info();
 
     if let Some(psram) = board::init_psram(p.QMI_CS1, p.PIN_0) {

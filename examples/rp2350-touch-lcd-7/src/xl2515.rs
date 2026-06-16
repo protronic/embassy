@@ -89,7 +89,7 @@ impl CanSpi {
             20_000 => 2,
             10_000 => 1,
             5_000 => 0,
-            _ => 7,
+            _ => 7, // 500 kbit/s if unknown
         };
         let timing = RATE_TABLE[idx];
         self.write_reg_byte(CNF1, timing[0]);

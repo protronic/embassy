@@ -15,8 +15,8 @@ use touch_hall_common::touch_feedback;
 use touch_hall_common::touch_hold;
 use touch_hall_common::rhai_state::Plc;
 use touch_hall_common::{
-    BUTTON_COUNT, CAN_COMMAND_REPEAT_MS, CAN_ENABLED, CAN_RX_DEBOUNCE_MS, CAN_RX_POLL_MS, CAN_TX_ID,
-    LONG_PRESS_MS, MINP_RX_ID, STATE_SCRIPT_ENABLED,
+    BUTTON_COUNT, CAN_BAUD, CAN_COMMAND_REPEAT_MS, CAN_ENABLED, CAN_RX_DEBOUNCE_MS, CAN_RX_POLL_MS,
+    CAN_TX_ID, LONG_PRESS_MS, MINP_RX_ID, STATE_SCRIPT_ENABLED,
 };
 
 use crate::can_driver;
@@ -352,8 +352,8 @@ pub async fn tx_task() {
         info!("button[{}] = {}", i, token);
     }
     info!(
-        "CAN TX: id=0x{:03x}, repeat={}ms, refresh={}ms idle (00×6), long_press={}ms",
-        CAN_TX_ID, CAN_COMMAND_REPEAT_MS, CAN_REFRESH_MS, LONG_PRESS_MS,
+        "CAN TX: id=0x{:03x}, {} bit/s, repeat={}ms, refresh={}ms idle (00×6), long_press={}ms",
+        CAN_TX_ID, CAN_BAUD, CAN_COMMAND_REPEAT_MS, CAN_REFRESH_MS, LONG_PRESS_MS,
     );
 
     if STATE_SCRIPT_ENABLED {
