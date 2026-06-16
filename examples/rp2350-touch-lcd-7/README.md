@@ -85,7 +85,7 @@ Two CDC ports on the Type-C cable:
 
 ## Architecture notes
 
-- **Display**: LVGL partial flush → PSRAM double buffers (same pattern as RVT50 LTDC). PIO RGB **scan-out** is stubbed in `pio_rgb.rs`; LVGL rendering and buffer management work — full DMA/PIO port follows Waveshare `pio_rgb.pio`.
+- **Display**: Full-screen LVGL refresh into PSRAM double buffers, then PIO RGB DMA scan-out (ported from Waveshare `pio_rgb.c` / `RP2350-Touch-7-Exp` LVGL C port). GT911 touch and XL2515 CAN unchanged.
 - **Touch**: Same INT-driven task + channel queue as RVT50 (`touch_feed.rs`), GT911 register protocol from Waveshare `bsp_gt911.c`.
 - **CAN**: On-chip FDCAN is **not** available on RP2350; Waveshare uses **XL2515** over SPI. Application protocol reuses `touch-hall-common` unchanged.
 

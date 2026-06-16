@@ -3,17 +3,14 @@
 extern crate alloc;
 
 use embassy_time::{Duration, Instant, Timer};
-use oxivgl::display::{DISPLAY_READY, LvglBuffers};
+use oxivgl::display::DISPLAY_READY;
 use oxivgl::driver::LvglDriver;
 use oxivgl::view::{register_view_events, View};
 use oxivgl::widgets::{Obj, Screen};
 use oxivgl_sys::LV_DEF_REFR_PERIOD;
 use static_cell::StaticCell;
 
-use crate::oxivgl::display::{
-    draw_buffer_after_lvgl_create, front_framebuffer, prefill_background, present_framebuffer,
-    prepare_back_for_draw, PanelDisplay,
-};
+use crate::oxivgl::display::{prefill_background, PanelDisplay, PanelMemory};
 use crate::oxivgl::hall_view::HallView;
 use crate::oxivgl::indev::{TouchInput, TouchSample};
 use crate::oxivgl::touch_feed::{self, TouchBoardSample};
@@ -42,10 +39,6 @@ fn drain_touch_queue(
     had_touch
 }
 
-async fn present_to_panel() {
-    let _ = present_framebuffer();
-}
-
 async fn lvgl_present_batch(
     driver: &LvglDriver,
     view: &mut HallView,
@@ -62,13 +55,11 @@ async fn lvgl_present_batch(
         driver.timer_handler();
         Timer::after(Duration::from_millis(LVGL_TICK_MS)).await;
     }
-
     let _ = view.update();
-    present_to_panel().await;
 }
 
 /// Run the hall lighting UI + CAN integration demo.
-pub async fn run_hall_demo(bufs: &'static mut LvglBuffers<{ super::platform::LVGL_BUF_BYTES }>) -> ! {
+pub async fn run_hall_demo(panel_mem: &'static PanelMemory) -> ! {
     let driver = LvglDriver::init(
         crate::board::DISPLAY_WIDTH as i32,
         crate::board::DISPLAY_HEIGHT as i32,
@@ -76,13 +67,11 @@ pub async fn run_hall_demo(bufs: &'static mut LvglBuffers<{ super::platform::LVG
     let _display = PanelDisplay::init(
         crate::board::DISPLAY_WIDTH as i32,
         crate::board::DISPLAY_HEIGHT as i32,
-        bufs,
+        panel_mem,
     );
 
     DISPLAY_READY.wait().await;
     prefill_background();
-
-    let _ = front_framebuffer();
 
     let view = VIEW.init(HallView::default());
     let screen = Screen::active().expect("LVGL screen must exist after display init");
@@ -94,7 +83,6 @@ pub async fn run_hall_demo(bufs: &'static mut LvglBuffers<{ super::platform::LVG
         }
     }
     register_view_events(view);
-    draw_buffer_after_lvgl_create();
 
     let touch = TouchInput::register();
     let mut touch_rx = touch_feed::receiver();
@@ -106,7 +94,6 @@ pub async fn run_hall_demo(bufs: &'static mut LvglBuffers<{ super::platform::LVG
     loop {
         Timer::after(Duration::from_millis(UI_TICK_MS)).await;
 
-        prepare_back_for_draw();
         let had_touch = drain_touch_queue(&mut touch_rx, &touch);
 
         if had_touch {
