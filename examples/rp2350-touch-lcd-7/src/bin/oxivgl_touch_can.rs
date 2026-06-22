@@ -22,7 +22,7 @@ use embassy_rp2350_touch_lcd_7_examples::xl2515::CanSpi;
 use embedded_alloc::LlffHeap as Heap;
 use static_cell::StaticCell;
 use touch_hall_common::{CAN_BAUD, CAN_ENABLED, HALL_NAME};
-use {panic_probe as _};
+use {defmt_rtt as _, panic_probe as _};
 
 const HEAP_SIZE: usize = 256 * 1024;
 
@@ -65,6 +65,8 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut lcd = board::init_lcd_pins(p.PIN_41, p.PIN_45, p.PIN_44);
     lcd.set_backlight(true);
+    display::prefill_background();
+    usb_monitor::line("panel: prefill done, starting PIO RGB");
 
     let mut i2c = board::init_i2c(p.I2C1, p.PIN_7, p.PIN_6);
     let mut touch_pins = board::init_touch_pins(p.PIN_19, p.PIN_18);

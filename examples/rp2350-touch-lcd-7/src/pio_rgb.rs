@@ -109,8 +109,14 @@ fn pio_freq_divider() -> FixedU32<U8> {
     FixedU32::from_num(div)
 }
 
-fn set_gpio_base(pio: pac::pio::Pio) {
-    pio.gpiobase().write(|w| w.set_gpiobase(true));
+/// Map `wait pin 4..7` in `pio_rgb.pio` to GPIO 20–23 (DE / VSYNC / HSYNC / PCLK).
+///
+/// Waveshare's program uses IN indices 4–7 with IN base GPIO16. embassy-rp cannot express
+/// cross-PIO `set_in_pins` (sync outputs live on PIO1), so patch the SM after `set_config`.
+fn apply_wait_pin_map(pio: pac::pio::Pio, sm: usize) {
+    let sm = pio.sm(sm);
+    sm.pinctrl().write(|w| w.set_in_base(0));
+    sm.shiftctrl().modify(|w| w.set_in_count(8));
 }
 
 fn rgb_dma_treq(sm: u8) -> pac::dma::vals::TreqSel {
@@ -306,6 +312,7 @@ pub fn init_scanout(
     let fb0 = FB0.load(Ordering::Acquire);
     let fb1 = FB1.load(Ordering::Acquire);
     if fb0.is_null() || fb1.is_null() {
+        SCANOUT_READY.store(false, Ordering::Release);
         warn!("PIO RGB: framebuffers not bound");
         return;
     }
@@ -321,9 +328,6 @@ pub fn init_scanout(
 
     let mut pio1_dev = Pio::new(pio1, ScanOutIrqs);
     let mut pio2_dev = Pio::new(pio2, ScanOutIrqs);
-
-    set_gpio_base(pac::PIO1);
-    set_gpio_base(pac::PIO2);
 
     let hsync_file = pio_file!("pio/pio_rgb.pio", select_program("hsync"), options(max_program_size = 64));
     let vsync_file = pio_file!("pio/pio_rgb.pio", select_program("vsync"), options(max_program_size = 64));
@@ -391,6 +395,8 @@ pub fn init_scanout(
     pio1_dev.sm1.set_config(&vsync_cfg);
     pio2_dev.sm0.set_config(&rgb_de_cfg);
     pio2_dev.sm1.set_config(&rgb_cfg);
+    apply_wait_pin_map(pac::PIO2, 0);
+    apply_wait_pin_map(pac::PIO2, 1);
 
     pio1_dev.sm0.set_pin_dirs(Direction::Out, &[&pin_hsync, &pin_pclk]);
     pio1_dev.sm1.set_pin_dirs(Direction::Out, &[&pin_vsync]);
