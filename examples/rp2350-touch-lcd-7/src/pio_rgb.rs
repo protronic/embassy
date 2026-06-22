@@ -13,7 +13,7 @@ use embassy_rp::gpio::{Drive, Pull, SlewRate};
 use embassy_rp::interrupt::typelevel::{Binding, Handler, Interrupt};
 use embassy_rp::dma::ChannelInstance;
 use embassy_rp::pio::program::pio_file;
-use embassy_rp::pio::{Config, Direction, FifoJoin, Pio, PioBatch, PioPin};
+use embassy_rp::pio::{Config, Direction, FifoJoin, Pio, PioPin};
 use embassy_rp::{bind_interrupts, pac, peripherals, Peri};
 use fixed::types::extra::U8;
 use fixed::FixedU32;
@@ -115,8 +115,26 @@ fn pio_freq_divider() -> FixedU32<U8> {
 /// cross-PIO `set_in_pins` (sync outputs live on PIO1), so patch the SM after `set_config`.
 fn apply_wait_pin_map(pio: pac::pio::Pio, sm: usize) {
     let sm = pio.sm(sm);
-    sm.pinctrl().write(|w| w.set_in_base(0));
+    // IN pin 4..7 → GPIO 20..23 (DE/VSYNC/HSYNC/PCLK) with gpio_base=16.
+    sm.pinctrl().write(|w| w.set_in_base(16));
     sm.shiftctrl().modify(|w| w.set_in_count(8));
+}
+
+fn prime_scanout_dma(state: &mut ScanOutState) {
+    unsafe {
+        ptr::copy_nonoverlapping(
+            state.active_framebuffer,
+            state.transfer_buffer1,
+            state.transfer_size,
+        );
+    }
+    state.transfer_index = 0;
+    dma_start_read(
+        state.dma_channel,
+        PIO2_RGB_SM,
+        state.transfer_buffer1,
+        state.transfer_size,
+    );
 }
 
 fn rgb_dma_treq(sm: u8) -> pac::dma::vals::TreqSel {
@@ -155,27 +173,21 @@ fn dma_complete_handler(state: &mut ScanOutState) {
         return;
     }
 
-    state.transfer_index = (state.transfer_index + 1) % TRANSFER_INDEX_MAX;
-
-    let chunk = state.transfer_index as usize * state.transfer_size;
+    let next_index = (state.transfer_index + 1) % TRANSFER_INDEX_MAX;
+    let chunk = next_index as usize * state.transfer_size;
     let transfer_src = unsafe { state.active_framebuffer.add(chunk) };
 
-    let dma_buf = if state.transfer_index % 2 == 0 {
+    let dma_buf = if next_index % 2 == 0 {
         state.transfer_buffer1
     } else {
         state.transfer_buffer2
-    };
-    let cp_buf = if state.transfer_index % 2 == 0 {
-        state.transfer_buffer2
-    } else {
-        state.transfer_buffer1
     };
 
-    // Match Waveshare C port: start DMA from the staged buffer, then copy the next chunk.
-    dma_start_read(state.dma_channel, PIO2_RGB_SM, dma_buf, state.transfer_size);
     unsafe {
-        ptr::copy_nonoverlapping(transfer_src, cp_buf, state.transfer_size);
+        ptr::copy_nonoverlapping(transfer_src, dma_buf, state.transfer_size);
     }
+    dma_start_read(state.dma_channel, PIO2_RGB_SM, dma_buf, state.transfer_size);
+    state.transfer_index = next_index;
 
     if state.change_framebuffer_flag && state.transfer_index == TRANSFER_INDEX_MAX - 1 {
         state.change_framebuffer_flag = false;
@@ -408,15 +420,9 @@ pub fn init_scanout(
     pio2_dev.sm0.tx().push(DISPLAY_HEIGHT as u32 - 1);
     pio2_dev.sm1.tx().push(DISPLAY_WIDTH as u32 - 1);
 
-    let mut batch1 = PioBatch::new();
-    batch1.set_enable(&mut pio1_dev.sm0, true);
-    batch1.set_enable(&mut pio1_dev.sm1, true);
-    batch1.execute();
-
-    let mut batch2 = PioBatch::new();
-    batch2.set_enable(&mut pio2_dev.sm0, true);
-    batch2.set_enable(&mut pio2_dev.sm1, true);
-    batch2.execute();
+    // Start all scan-out state machines together (Waveshare `pio_enable_sm_mask_in_sync`).
+    pac::PIO1.ctrl().modify(|w| w.set_sm_enable(w.sm_enable() | 0b0011));
+    pac::PIO2.ctrl().modify(|w| w.set_sm_enable(w.sm_enable() | 0b0011));
 
     // Keep PIO peripherals alive — dropping `Pio` disables all state machines.
     SCANOUT_PIO1.init(pio1_dev);
@@ -426,7 +432,7 @@ pub fn init_scanout(
     pac::DMA.inte(0).write(|w| *w = 1 << ch);
     unsafe { embassy_rp::interrupt::typelevel::DMA_IRQ_0::enable() };
 
-    dma_complete_handler(state);
+    prime_scanout_dma(state);
     info!(
         "PIO RGB scan-out started ({}x{} @ {} MHz pclk)",
         DISPLAY_WIDTH,

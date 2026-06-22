@@ -63,6 +63,7 @@ async fn lvgl_present_batch(
 
 /// Run the OxivGL widget demo.
 pub async fn run_widget_demo(panel_mem: &'static PanelMemory) -> ! {
+    defmt::info!("oxivgl ui task starting");
     let driver = LvglDriver::init(DISPLAY_WIDTH as i32, crate::board::DISPLAY_HEIGHT as i32);
     let _display = PanelDisplay::init(DISPLAY_WIDTH as i32, crate::board::DISPLAY_HEIGHT as i32, panel_mem);
 

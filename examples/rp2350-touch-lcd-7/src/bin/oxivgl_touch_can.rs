@@ -63,7 +63,7 @@ async fn main(spawner: Spawner) -> ! {
     };
     let panel_mem = panel_mem.expect("PSRAM required for OxivGL display");
 
-    let mut lcd = board::init_lcd_pins(p.PIN_41, p.PIN_45, p.PIN_44);
+    let mut lcd = board::init_lcd_pins(p.PIN_41, p.PIN_45, p.PWM_SLICE10, p.PIN_44);
     lcd.set_backlight(true);
     display::prefill_background();
     usb_monitor::line("panel: prefill done, starting PIO RGB");

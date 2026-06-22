@@ -46,12 +46,7 @@ pub(crate) fn lvgl_display() -> *mut lv_display_t {
     unsafe { LVGL_DISP }
 }
 
-fn rgb565(r: u8, g: u8, b: u8) -> u16 {
-    ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)
-}
-
-pub fn prefill_background() {
-    let px = rgb565(16, 32, 48);
+    let px = 0xFFFFu16;
     for fb in [pio_rgb::front_ptr(), pio_rgb::draw_ptr()] {
         if fb.is_null() {
             continue;
