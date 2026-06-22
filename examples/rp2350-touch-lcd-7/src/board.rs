@@ -6,7 +6,7 @@ use embassy_rp::gpio::{Flex, Level, Output};
 use embassy_rp::i2c::{Config as I2cConfig, I2c};
 use embassy_rp::i2c::Blocking;
 use embassy_rp::peripherals;
-use embassy_rp::pwm::{ChannelAPin, Config as PwmConfig, Pwm, SetDutyCycle};
+use embassy_rp::pwm::{ChannelAPin, Config as PwmConfig, Pwm};
 use embassy_rp::config::Config;
 use embassy_rp::{Peri, Peripherals};
 use fixed::types::extra::U4;
@@ -84,7 +84,7 @@ pub fn read_touch(i2c: &mut BoardI2c) -> TouchPoint {
 pub struct LcdPins {
     pub rst: Output<'static>,
     pub en: Output<'static>,
-    bl: Pwm<'static>,
+    bl_pwm: Pwm<'static>,
 }
 
 fn lcd_pwm_config(percent: u8) -> PwmConfig {
@@ -93,9 +93,10 @@ fn lcd_pwm_config(percent: u8) -> PwmConfig {
     let mut cfg = PwmConfig::default();
     cfg.top = LCD_PWM_TOP;
     cfg.divider = FixedU16::<U4>::from_num(div);
-    // Match Waveshare `bsp_lcd_set_brightness`: lower compare = brighter (active-low BL).
+    // Waveshare `bsp_lcd_set_brightness`: pwm level 0 = brightest (active-low BL).
     cfg.compare_a = (u32::from(LCD_PWM_TOP) * (100 - u32::from(percent.min(100))) / 100) as u16;
-    cfg.enable = true;
+    cfg.compare_b = 0;
+    cfg.enable = percent > 0;
     cfg
 }
 
@@ -108,7 +109,11 @@ pub fn init_lcd_pins(
     let mut lcd = LcdPins {
         rst: Output::new(rst, Level::High),
         en: Output::new(en, Level::High),
-        bl: Pwm::new_output_a(bl_slice, bl, lcd_pwm_config(0)),
+        bl_pwm: Pwm::new_output_a(bl_slice, bl, {
+            let mut cfg = lcd_pwm_config(0);
+            cfg.enable = false;
+            cfg
+        }),
     };
     lcd.reset();
     lcd
@@ -131,15 +136,24 @@ impl LcdPins {
         if percent == 0 {
             self.en.set_low();
             self.rst.set_low();
-            let _ = self.bl.set_duty_cycle_fully_off();
+            let mut cfg = lcd_pwm_config(0);
+            cfg.enable = false;
+            self.bl_pwm.set_config(&cfg);
+            info!("LCD backlight off");
             return;
         }
+
         self.en.set_high();
         self.rst.set_high();
-        let compare =
-            (u32::from(LCD_PWM_TOP) * (100 - u32::from(percent.min(100))) / 100) as u16;
-        let _ = self.bl.set_duty_cycle(compare);
-        info!("LCD backlight {}%", percent);
+
+        // Use set_config (channel A only). Avoid set_duty_cycle() — it also writes
+        // compare B on GPIO 45 (LCD EN) because both share PWM slice 10.
+        let cfg = lcd_pwm_config(percent);
+        self.bl_pwm.set_config(&cfg);
+        info!(
+            "LCD backlight {}% (PWM compare_a={})",
+            percent, cfg.compare_a
+        );
     }
 }
 

@@ -109,10 +109,10 @@ fn pio_freq_divider() -> FixedU32<U8> {
     FixedU32::from_num(div)
 }
 
-/// Map `wait pin 4..7` in `pio_rgb.pio` to GPIO 20–23 (DE / VSYNC / HSYNC / PCLK).
-///
-/// Waveshare's program uses IN indices 4–7 with IN base GPIO16. embassy-rp cannot express
-/// cross-PIO `set_in_pins` (sync outputs live on PIO1), so patch the SM after `set_config`.
+fn set_gpio_base(pio: pac::pio::Pio) {
+    pio.gpiobase().write(|w| w.set_gpiobase(true));
+}
+
 fn apply_wait_pin_map(pio: pac::pio::Pio, sm: usize) {
     let sm = pio.sm(sm);
     // IN pin 4..7 → GPIO 20..23 (DE/VSYNC/HSYNC/PCLK) with gpio_base=16.
@@ -340,6 +340,9 @@ pub fn init_scanout(
 
     let mut pio1_dev = Pio::new(pio1, ScanOutIrqs);
     let mut pio2_dev = Pio::new(pio2, ScanOutIrqs);
+
+    set_gpio_base(pac::PIO1);
+    set_gpio_base(pac::PIO2);
 
     let hsync_file = pio_file!("pio/pio_rgb.pio", select_program("hsync"), options(max_program_size = 64));
     let vsync_file = pio_file!("pio/pio_rgb.pio", select_program("vsync"), options(max_program_size = 64));
