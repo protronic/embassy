@@ -1,7 +1,7 @@
 //! GT911 capacitive touch controller (I2C).
 
 use defmt::{debug, warn};
-use embassy_rp::gpio::Output;
+use embassy_rp::gpio::{Flex, Output, Pull};
 use embassy_time::{Duration, Timer};
 
 use crate::board::{BoardI2c, DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -18,7 +18,11 @@ pub struct TouchPoint {
     pub i2c_ok: bool,
 }
 
-pub async fn init(i2c: &mut BoardI2c, rst: &mut Output<'static>) {
+pub async fn init(i2c: &mut BoardI2c, rst: &mut Output<'static>, int: &mut Flex<'static>) {
+    // INT low during reset selects I2C address 0x5D (Waveshare `bsp_gt911.c`).
+    int.set_low();
+    int.set_as_output();
+
     rst.set_high();
     Timer::after(Duration::from_millis(50)).await;
     rst.set_low();
@@ -31,6 +35,8 @@ pub async fn init(i2c: &mut BoardI2c, rst: &mut Output<'static>) {
         match i2c.blocking_write_read(I2C_ADDR, &reg16_be(REG_PRODUCT_ID), &mut id) {
             Ok(()) if id[0] == b'9' && id[1] == b'1' && id[2] == b'1' => {
                 debug!("GT911 product id: {:a}", &id[..4]);
+                int.set_as_input();
+                int.set_pull(Pull::Up);
                 return;
             }
             Ok(()) => warn!(

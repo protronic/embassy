@@ -2,7 +2,7 @@
 
 use defmt::info;
 use embassy_rp::clocks::ClockConfig;
-use embassy_rp::gpio::{Input, Level, Output, Pull};
+use embassy_rp::gpio::{Flex, Level, Output};
 use embassy_rp::i2c::{Config as I2cConfig, I2c};
 use embassy_rp::i2c::Blocking;
 use embassy_rp::peripherals;
@@ -53,7 +53,7 @@ pub fn init_i2c(
 
 pub struct TouchPins {
     pub rst: Output<'static>,
-    pub int: Input<'static>,
+    pub int: Flex<'static>,
 }
 
 pub fn init_touch_pins(
@@ -62,12 +62,12 @@ pub fn init_touch_pins(
 ) -> TouchPins {
     TouchPins {
         rst: Output::new(rst, Level::High),
-        int: Input::new(int, Pull::Up),
+        int: Flex::new(int),
     }
 }
 
 pub async fn init_gt911(i2c: &mut BoardI2c, touch: &mut TouchPins) {
-    gt911::init(i2c, &mut touch.rst).await;
+    gt911::init(i2c, &mut touch.rst, &mut touch.int).await;
 }
 
 pub fn read_touch(i2c: &mut BoardI2c) -> TouchPoint {

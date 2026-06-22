@@ -189,22 +189,18 @@ pub fn bind_framebuffers(fb0: *mut u16, fb1: *mut u16) {
     FB0.store(fb0, Ordering::Release);
     FB1.store(fb1, Ordering::Release);
     if SCANOUT_READY.load(Ordering::Acquire) {
-        unsafe {
-            let state = unsafe { &mut *scanout_mut() };
-            state.framebuffer1 = fb0;
-            state.framebuffer2 = fb1;
-            state.active_framebuffer = fb0;
-        }
+        let state = unsafe { &mut *scanout_mut() };
+        state.framebuffer1 = fb0;
+        state.framebuffer2 = fb1;
+        state.active_framebuffer = fb0;
     }
 }
 
 /// Register PSRAM/SRAM DMA staging buffers (`width × 80` RGB565 pixels each).
 pub fn bind_transfer_buffers(tb0: *mut u16, tb1: *mut u16) {
-    unsafe {
-        let state = unsafe { &mut *scanout_mut() };
-        state.transfer_buffer1 = tb0;
-        state.transfer_buffer2 = tb1;
-    }
+    let state = unsafe { &mut *scanout_mut() };
+    state.transfer_buffer1 = tb0;
+    state.transfer_buffer2 = tb1;
 }
 
 /// LVGL flush completion: swap the scanned-out framebuffer when the DMA frame finishes.
