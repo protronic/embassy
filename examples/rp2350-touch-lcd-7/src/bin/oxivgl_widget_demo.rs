@@ -10,6 +10,7 @@ use core::slice;
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
 use embassy_rp2350_touch_lcd_7_examples::board::{self, DISPLAY_HEIGHT, DISPLAY_WIDTH};
+use embassy_rp2350_touch_lcd_7_examples::firmware_id::FIRMWARE_ID;
 use embassy_rp2350_touch_lcd_7_examples::oxivgl::display::{self, PanelMemory};
 use embassy_rp2350_touch_lcd_7_examples::oxivgl::platform;
 use embassy_rp2350_touch_lcd_7_examples::oxivgl::touch_feed;
@@ -39,8 +40,10 @@ async fn main(spawner: Spawner) -> ! {
     init_heap();
 
     info!(
-        "RP2350 OxivGL widget demo ({}x{}) [pio-rgb branch]",
-        DISPLAY_WIDTH, DISPLAY_HEIGHT
+        "RP2350 OxivGL widget demo ({}x{}) firmware={:a}",
+        DISPLAY_WIDTH,
+        DISPLAY_HEIGHT,
+        FIRMWARE_ID.as_bytes()
     );
 
     let p = board::init();
