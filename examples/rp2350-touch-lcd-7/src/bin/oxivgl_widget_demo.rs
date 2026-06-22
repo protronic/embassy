@@ -66,17 +66,15 @@ async fn main(spawner: Spawner) -> ! {
     let mut lcd = board::init_lcd_pins(p.PIN_41, p.PIN_45, p.PIN_44);
     lcd.set_backlight(true);
     display::prefill_background();
-<<<<<<< HEAD
+    usb_monitor::line("panel: prefill done, init GT911");
 
     let mut i2c = board::init_i2c(p.I2C1, p.PIN_7, p.PIN_6);
     let mut touch_pins = board::init_touch_pins(p.PIN_19, p.PIN_18);
     board::init_gt911(&mut i2c, &mut touch_pins).await;
     let touch_int = touch_pins.int;
     spawner.spawn(unwrap!(touch_feed::run_touch_int_task(i2c, touch_int)));
-=======
-    usb_monitor::line("panel: prefill done, starting PIO RGB");
->>>>>>> 28111dad9 (Fix RP2350 Touch LCD 7 PIO RGB scanout and probe-rs defmt logging.)
 
+    usb_monitor::line("panel: starting PIO RGB scan-out");
     pio_rgb::init_scanout(
         p.PIO1,
         p.PIO2,
