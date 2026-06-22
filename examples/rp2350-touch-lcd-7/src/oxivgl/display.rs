@@ -45,7 +45,7 @@ impl PanelDisplay {
 pub(crate) fn lvgl_display() -> *mut lv_display_t {
     unsafe { LVGL_DISP }
 }
-
+pub fn prefill_background() {
     let px = 0xFFFFu16;
     for fb in [pio_rgb::front_ptr(), pio_rgb::draw_ptr()] {
         if fb.is_null() {
