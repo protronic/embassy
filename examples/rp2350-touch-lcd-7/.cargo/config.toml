@@ -8,7 +8,7 @@ runner = "probe-rs run --chip RP235x --preverify"
 target = "thumbv8m.main-none-eabihf"
 
 [env]
-DEFMT_LOG = "info"
+DEFMT_LOG = "debug"
 # CAN baud from touch project: DemoHost=50k, Demo=500k (override: TOUCH_PROJECT=Demo)
 TOUCH_PROJECT = "DemoHost"
 DEP_LV_CONFIG_PATH = { value = "conf", relative = true }
