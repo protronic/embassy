@@ -1,6 +1,6 @@
 //! GT911 capacitive touch controller (I2C).
 
-use defmt::{debug, warn};
+use defmt::warn;
 use embassy_rp::gpio::{Flex, Output, Pull};
 use embassy_time::{Duration, Timer};
 
@@ -34,7 +34,7 @@ pub async fn init(i2c: &mut BoardI2c, rst: &mut Output<'static>, int: &mut Flex<
     for attempt in 0..10 {
         match i2c.blocking_write_read(I2C_ADDR, &reg16_be(REG_PRODUCT_ID), &mut id) {
             Ok(()) if id[0] == b'9' && id[1] == b'1' && id[2] == b'1' => {
-                debug!("GT911 product id: {:a}", &id[..4]);
+                defmt::info!("GT911 product id: {:a}", &id[..4]);
                 int.set_as_input();
                 int.set_pull(Pull::Up);
                 return;

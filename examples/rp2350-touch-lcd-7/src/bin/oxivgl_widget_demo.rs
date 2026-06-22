@@ -62,6 +62,13 @@ async fn main(spawner: Spawner) -> ! {
 
     let mut lcd = board::init_lcd_pins(p.PIN_41, p.PIN_45, p.PIN_44);
     lcd.set_backlight(true);
+    display::prefill_background();
+
+    let mut i2c = board::init_i2c(p.I2C1, p.PIN_7, p.PIN_6);
+    let mut touch_pins = board::init_touch_pins(p.PIN_19, p.PIN_18);
+    board::init_gt911(&mut i2c, &mut touch_pins).await;
+    let touch_int = touch_pins.int;
+    spawner.spawn(unwrap!(touch_feed::run_touch_int_task(i2c, touch_int)));
 
     pio_rgb::init_scanout(
         p.PIO1,
@@ -89,12 +96,6 @@ async fn main(spawner: Spawner) -> ! {
         p.PIN_38,
         p.PIN_39,
     );
-
-    let mut i2c = board::init_i2c(p.I2C1, p.PIN_7, p.PIN_6);
-    let mut touch_pins = board::init_touch_pins(p.PIN_19, p.PIN_18);
-    board::init_gt911(&mut i2c, &mut touch_pins).await;
-    let touch_int = touch_pins.int;
-    spawner.spawn(unwrap!(touch_feed::run_touch_int_task(i2c, touch_int)));
 
     spawner.spawn(unwrap!(ui_task(panel_mem)));
 

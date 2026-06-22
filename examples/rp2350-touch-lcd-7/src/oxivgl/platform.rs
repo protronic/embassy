@@ -15,6 +15,7 @@ use crate::oxivgl::display::{prefill_background, PanelDisplay, PanelMemory};
 use crate::oxivgl::indev::{TouchInput, TouchSample};
 use crate::oxivgl::touch_feed::{self, TouchBoardSample};
 use crate::oxivgl::widget_view::WidgetView;
+use crate::pio_rgb;
 
 const LVGL_TICK_MS: u64 = LV_DEF_REFR_PERIOD as u64 / 4;
 const PRESENT_PERIOD_MS: u64 = 33;
@@ -53,6 +54,7 @@ async fn lvgl_present_batch(
 ) {
     for _ in 0..PRESENT_LVGL_TICKS {
         let _ = drain_touch_queue(touch_rx, touch);
+        pio_rgb::poll_flush_ready();
         driver.timer_handler();
         Timer::after(Duration::from_millis(LVGL_TICK_MS)).await;
     }
@@ -87,6 +89,7 @@ pub async fn run_widget_demo(panel_mem: &'static PanelMemory) -> ! {
 
     loop {
         Timer::after(Duration::from_millis(UI_TICK_MS)).await;
+        pio_rgb::poll_flush_ready();
 
         let had_touch = drain_touch_queue(&mut touch_rx, &touch);
 

@@ -7,6 +7,7 @@ use core::ptr;
 use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use defmt::{info, warn};
+use static_cell::StaticCell;
 use embassy_rp::clocks::clk_sys_freq;
 use embassy_rp::gpio::{Drive, Pull, SlewRate};
 use embassy_rp::interrupt::typelevel::{Binding, Handler, Interrupt};
@@ -67,6 +68,11 @@ impl ScanOutState {
 
 static mut SCANOUT: ScanOutState = ScanOutState::empty();
 static SCANOUT_READY: AtomicBool = AtomicBool::new(false);
+static SCANOUT_PIO1: StaticCell<Pio<'static, peripherals::PIO1>> = StaticCell::new();
+static SCANOUT_PIO2: StaticCell<Pio<'static, peripherals::PIO2>> = StaticCell::new();
+
+#[cfg(feature = "oxivgl")]
+static FLUSH_DISP: AtomicPtr<oxivgl_sys::lv_display_t> = AtomicPtr::new(ptr::null_mut());
 
 #[inline(always)]
 unsafe fn scanout_mut() -> *mut ScanOutState {
@@ -159,15 +165,13 @@ fn dma_complete_handler(state: &mut ScanOutState) {
         state.transfer_buffer1
     };
 
-    for i in 0..state.transfer_size {
-        unsafe {
-            *cp_buf.add(i) = *transfer_src.add(i);
-        }
+    // Match Waveshare C port: start DMA from the staged buffer, then copy the next chunk.
+    dma_start_read(state.dma_channel, PIO2_RGB_SM, dma_buf, state.transfer_size);
+    unsafe {
+        ptr::copy_nonoverlapping(transfer_src, cp_buf, state.transfer_size);
     }
 
-    dma_start_read(state.dma_channel, PIO2_RGB_SM, dma_buf, state.transfer_size);
-
-        if state.change_framebuffer_flag && state.transfer_index == TRANSFER_INDEX_MAX - 1 {
+    if state.change_framebuffer_flag && state.transfer_index == TRANSFER_INDEX_MAX - 1 {
         state.change_framebuffer_flag = false;
         state.active_framebuffer = if state.active_framebuffer == state.framebuffer1 {
             state.framebuffer2
@@ -177,9 +181,19 @@ fn dma_complete_handler(state: &mut ScanOutState) {
         #[cfg(feature = "oxivgl")]
         if state.flush_pending && !state.flush_disp.is_null() {
             state.flush_pending = false;
-            unsafe {
-                oxivgl_sys::lv_display_flush_ready(state.flush_disp);
-            }
+            FLUSH_DISP.store(state.flush_disp, Ordering::Release);
+            state.flush_disp = ptr::null_mut();
+        }
+    }
+}
+
+/// Call from the LVGL task after DMA scan-out completes (not from the DMA ISR).
+#[cfg(feature = "oxivgl")]
+pub fn poll_flush_ready() {
+    let disp = FLUSH_DISP.swap(ptr::null_mut(), Ordering::AcqRel);
+    if !disp.is_null() {
+        unsafe {
+            oxivgl_sys::lv_display_flush_ready(disp);
         }
     }
 }
@@ -397,6 +411,10 @@ pub fn init_scanout(
     batch2.set_enable(&mut pio2_dev.sm0, true);
     batch2.set_enable(&mut pio2_dev.sm1, true);
     batch2.execute();
+
+    // Keep PIO peripherals alive — dropping `Pio` disables all state machines.
+    SCANOUT_PIO1.init(pio1_dev);
+    SCANOUT_PIO2.init(pio2_dev);
 
     let ch = peripherals::DMA_CH0::number();
     pac::DMA.inte(0).write(|w| *w = 1 << ch);
