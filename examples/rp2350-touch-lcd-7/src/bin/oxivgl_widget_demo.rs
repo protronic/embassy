@@ -39,7 +39,7 @@ async fn main(spawner: Spawner) -> ! {
     init_heap();
 
     info!(
-        "RP2350 OxivGL widget demo ({}x{})",
+        "RP2350 OxivGL widget demo ({}x{}) [pio-rgb branch]",
         DISPLAY_WIDTH, DISPLAY_HEIGHT
     );
 

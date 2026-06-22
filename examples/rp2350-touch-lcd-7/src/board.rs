@@ -48,7 +48,9 @@ pub fn init_i2c(
     scl: Peri<'static, impl embassy_rp::i2c::SclPin<peripherals::I2C1>>,
     sda: Peri<'static, impl embassy_rp::i2c::SdaPin<peripherals::I2C1>>,
 ) -> BoardI2c {
-    I2c::new_blocking(i2c1, scl, sda, I2cConfig::default())
+    let mut config = I2cConfig::default();
+    config.frequency = 400_000;
+    I2c::new_blocking(i2c1, scl, sda, config)
 }
 
 pub struct TouchPins {
