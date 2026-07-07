@@ -23,6 +23,11 @@ cortex-m-rt = "0.7.0"
 panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 static_cell = "2"
 embedded-alloc = { version = "0.6.0", features = ["llff"], optional = true }
+embedded-can = { version = "0.4", optional = true }
+
+# Shared JSON-driven hall lighting config + CAN bitmask protocol
+# (`examples/touch-projects/<TOUCH_PROJECT>`), used by `oxivgl_touch_can`.
+touch-hall-common = { path = "../touch-hall-common", features = ["rhai", "defmt"], optional = true }
 
 # oxivgl — safe Rust bindings over C LVGL v9.5 (compiled from source via
 # oxivgl-sys with `conf/lv_conf.h`). Gated behind the `oxivgl-demo` feature so
@@ -32,7 +37,7 @@ oxivgl-sys = { version = "0.2.2", default-features = false, optional = true }
 
 [features]
 default = []
-oxivgl-demo = ["dep:oxivgl", "dep:oxivgl-sys", "dep:embedded-alloc"]
+oxivgl-demo = ["dep:oxivgl", "dep:oxivgl-sys", "dep:embedded-alloc", "dep:embedded-can", "dep:touch-hall-common"]
 
 [[bin]]
 # FT813 bring-up smoke test (colour bars + touch log) — no LVGL required.
@@ -42,6 +47,12 @@ path = "src/bin/ft813_selftest.rs"
 [[bin]]
 name = "oxivgl_widget_demo"
 path = "src/bin/oxivgl_widget_demo.rs"
+required-features = ["oxivgl-demo"]
+
+[[bin]]
+# CANbossTouch: JSON-driven hall lighting UI with CAN press/hold/repeat.
+name = "oxivgl_touch_can"
+path = "src/bin/oxivgl_touch_can.rs"
 required-features = ["oxivgl-demo"]
 
 [profile.release]
