@@ -1,8 +1,11 @@
 //! CANopen node on the STM32H573I-DK, using the CANopenNode Rust port.
 //!
 //! The discovery kit exposes FDCAN2 on the Arduino connector: PB5 = RX on
-//! D3, PB6 = TX on D15 (FDCAN1's pins are taken by other board functions) —
-//! attach a CAN transceiver shield there. Classic CAN at 500 kbit/s.
+//! D3, PB6 = TX on D15 — attach a CAN transceiver breakout there (raw
+//! TXD/RXD type like SN65HVD230/MCP2562, not an SPI shield). FDCAN1 is not
+//! usable on this board: every FDCAN1_RX-capable pin is hard-wired to
+//! another function (PA11 USB, PB8 I2C4, PD0 LCD, PE0/PH14 detect pins,
+//! PI9 LED, PI10 ETH). Classic CAN at 500 kbit/s.
 //!
 //! The device boots as a CANopen slave with the DS301 example object
 //! dictionary: boot-up message, cyclic heartbeat, NMT slave, SDO server and
@@ -52,8 +55,15 @@ impl NodeBus for FdcanBus<'_> {
                     }
                 }
                 // Bus error (e.g. bus-off recovery in progress): keep
-                // listening; EMCY reporting is a later port milestone.
-                Err(err) => warn!("CAN rx error: {}", err),
+                // listening; EMCY reporting is a later port milestone. The
+                // error counters tell wiring problems apart: TEC rising with
+                // no RX traffic means our frames are not being ACKed.
+                Err(err) => warn!(
+                    "CAN rx error: {} (TEC={} REC={})",
+                    err,
+                    self.can.properties().tx_error_count(),
+                    self.can.properties().rx_error_count(),
+                ),
             }
         }
     }
@@ -65,12 +75,13 @@ impl NodeBus for FdcanBus<'_> {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    // The DK has a 25 MHz HSE crystal; use it as the FDCAN kernel clock so
-    // the bit timing is exact.
+    // The DK feeds HSE from an active 25 MHz oscillator (X3) on OSC_IN, not
+    // a crystal: digital bypass mode, like ST's RCC_HSE_BYPASS_DIGITAL in the
+    // Cube templates. Use it as the FDCAN kernel clock so bit timing is exact.
     let mut config = embassy_stm32::Config::default();
     config.rcc.hse = Some(rcc::Hse {
         freq: embassy_stm32::time::Hertz(25_000_000),
-        mode: rcc::HseMode::Oscillator,
+        mode: rcc::HseMode::BypassDigital,
     });
     config.rcc.mux.fdcan12sel = rcc::mux::Fdcansel::Hse;
     let p = embassy_stm32::init(config);
