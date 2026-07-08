@@ -1,0 +1,63 @@
+[package]
+edition = "2024"
+name = "embassy-gen4-ft813-70ctp-h573i-dk-examples"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+publish = false
+
+description = "OxivGL (C LVGL v9.5) on a 4D Systems gen4-FT813-70CTP-CLB (EVE2 over SPI) driven by an STM32H573I-DK"
+
+[dependencies]
+# STM32H573I-DK: STM32H573IIK3Q, Cortex-M33 @ 250 MHz, 2 MB flash, 640 KB RAM.
+embassy-stm32 = { version = "0.6.0", path = "../../embassy-stm32", features = ["defmt", "unstable-pac", "stm32h573ii", "time-driver-any", "memory-x", "exti"] }
+embassy-sync = { version = "0.8.0", path = "../../embassy-sync", features = ["defmt"] }
+embassy-executor = { version = "0.10.0", path = "../../embassy-executor", features = ["platform-cortex-m", "executor-thread", "defmt"] }
+embassy-time = { version = "0.5.1", path = "../../embassy-time", features = ["defmt", "defmt-timestamp-uptime", "tick-hz-32_768"] }
+embassy-futures = { version = "0.1.2", path = "../../embassy-futures" }
+
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+
+cortex-m = { version = "0.7.6", features = ["inline-asm", "critical-section-single-core"] }
+cortex-m-rt = "0.7.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+static_cell = "2"
+embedded-alloc = { version = "0.6.0", features = ["llff"], optional = true }
+
+# oxivgl — safe Rust bindings over C LVGL v9.5 (compiled from source via
+# oxivgl-sys with `conf/lv_conf.h`). Gated behind the `oxivgl-demo` feature so
+# the board support (FT81x SPI driver + self-test) builds without the C stack.
+oxivgl = { version = "0.5.0", default-features = false, optional = true }
+oxivgl-sys = { version = "0.2.2", default-features = false, optional = true }
+
+[features]
+default = []
+oxivgl-demo = ["dep:oxivgl", "dep:oxivgl-sys", "dep:embedded-alloc"]
+
+[[bin]]
+# FT813 bring-up smoke test (colour bars + touch log) — no LVGL required.
+name = "ft813_selftest"
+path = "src/bin/ft813_selftest.rs"
+
+[[bin]]
+name = "oxivgl_widget_demo"
+path = "src/bin/oxivgl_widget_demo.rs"
+required-features = ["oxivgl-demo"]
+
+[profile.release]
+debug = 2
+
+[patch.crates-io]
+embassy-time = { path = "../../embassy-time" }
+embassy-sync = { path = "../../embassy-sync" }
+embassy-futures = { path = "../../embassy-futures" }
+# Vendored copies shared with `examples/gen4-rp2350-70ct` (oxivgl 0.5.0 with the
+# PNG example-asset conversion removed; oxivgl-sys 0.2.2 patched for bare-metal
+# thumb cross-compilation).
+oxivgl = { path = "vendor/oxivgl" }
+oxivgl-sys = { path = "vendor/oxivgl-sys" }
+
+[package.metadata.embassy]
+build = [
+  { target = "thumbv8m.main-none-eabihf", artifact-dir = "out/examples/gen4-ft813-70ctp-h573i-dk" }
+]

@@ -1,0 +1,16 @@
+[target.'cfg(all(target_arch = "arm", target_os = "none"))']
+# STM32H573I-DK Discovery kit (STM32H573IIK3Q)
+runner = "probe-rs run --chip STM32H573II --preverify"
+
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[target.thumbv8m.main-none-eabihf]
+linker = "rust-lld"
+
+[env]
+DEFMT_LOG = "info"
+# Required by oxivgl-sys when building with `--features oxivgl-demo`:
+# location of `lv_conf.h` and the custom (latin) LVGL font sources.
+DEP_LV_CONFIG_PATH = { value = "conf", relative = true }
+LVGL_FONTS_DIR = { value = "fonts", relative = true }
