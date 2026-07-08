@@ -24,6 +24,7 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"] }
 static_cell = "2"
 embedded-alloc = { version = "0.6.0", features = ["llff"], optional = true }
 embedded-can = { version = "0.4", optional = true }
+heapless = "0.8"
 
 # Shared JSON-driven hall lighting config + CAN bitmask protocol
 # (`examples/touch-projects/<TOUCH_PROJECT>`), used by `oxivgl_touch_can`.
@@ -34,6 +35,10 @@ touch-hall-common = { path = "../touch-hall-common", features = ["rhai", "defmt"
 # the board support (FT81x SPI driver + self-test) builds without the C stack.
 oxivgl = { version = "0.5.0", default-features = false, optional = true }
 oxivgl-sys = { version = "0.2.2", default-features = false, optional = true }
+
+[build-dependencies]
+# eds/network.json fuer den CANbossTouch-Rust-Port (build.rs-Codegen)
+serde_json = "1"
 
 [features]
 default = []
@@ -53,6 +58,13 @@ required-features = ["oxivgl-demo"]
 # CANbossTouch: JSON-driven hall lighting UI with CAN press/hold/repeat.
 name = "oxivgl_touch_can"
 path = "src/bin/oxivgl_touch_can.rs"
+required-features = ["oxivgl-demo"]
+
+[[bin]]
+# CANbossTouch Rust-Port: CANopen-Bediengeraet (EDS-Screens + SDO-Client +
+# PoC-Hallenlicht) — Vollport des C-Projekts protronic/CANbossTouch.
+name = "canboss_touch"
+path = "src/bin/canboss_touch.rs"
 required-features = ["oxivgl-demo"]
 
 [profile.release]

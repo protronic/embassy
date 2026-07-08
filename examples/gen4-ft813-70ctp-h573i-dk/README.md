@@ -82,14 +82,42 @@ cargo run --release --bin ft813_selftest
 # OxivGL (C LVGL) widget demo
 cargo run --release --bin oxivgl_widget_demo --features oxivgl-demo
 
-# CANbossTouch: JSON-driven hall lighting UI + CAN press/hold/repeat (FDCAN2)
+# JSON-driven hall lighting UI + CAN press/hold/repeat (FDCAN2)
 cargo run --release --bin oxivgl_touch_can --features oxivgl-demo
+
+# CANbossTouch Rust-Port: CANopen-Bediengeraet (EDS-Screens + SDO-Client)
+cargo run --release --bin canboss_touch --features oxivgl-demo
 ```
 
 `ft813_selftest` paints eight colour bars and logs touch coordinates — run it
 first to verify wiring and FT813 bring-up without the C stack.
 
-### CANbossTouch (`oxivgl_touch_can`)
+### CANbossTouch Rust-Port (`canboss_touch`)
+
+Vollport des C-Projekts [protronic/CANbossTouch](https://github.com/protronic/CANbossTouch)
+auf Rust/embassy/oxivgl — dieselbe Bediengeraete-Funktionalitaet auf derselben
+Hardware:
+
+- **EDS-Screens**: `build.rs` parst `eds/network.json` + EDS-Dateien (CiA 306)
+  und generiert je Knoten eine Datenpunkt-Tabelle (Rust-Pendant zu
+  `tools/eds2lvgl.py`). Der Navigator zeigt ein Hauptmenue (Knotenliste) und
+  je Knoten einen Screen mit einer Widget-Zeile pro Datenpunkt — verfeinerte
+  Zuordnung wie im C-Port: Wertanzeige, Balken (ro + Limits), Switch (BOOL /
+  0..1), Slider (Limit-Spanne ≤ 2000, Schreiben beim Loslassen), Spinbox
+  (Integer bzw. REAL32 als Festkomma ×1000), Textfeld mit Tastatur.
+- **SDO-Client** (`src/canboss/sdo.rs`): eigener CiA-301-Client (expedited +
+  segmented Up-/Download, 0x600/0x580+NodeID, 500 ms Timeout); die UI pollt
+  Slot-Zustaende wie im C-Original (zyklischer Refresh 1 s/Zeile, max. 4 neue
+  Reads pro Scan, Edit-Hold 2 s).
+- **PoC-Hallenlicht** als Menuepunkt: der `hall_view`-Screen inklusive
+  Rhai-PLC (`touch-hall-common`) — SDO- und PoC-Frames teilen sich FDCAN2
+  ueber eine TX-Queue + RX-Router (`src/canboss/canbus.rs`).
+
+Anders als das C-Original (CANopenNode-Stack) ist das Panel hier kein
+vollstaendiger CANopen-Knoten (kein NMT/Heartbeat/SDO-Server) — implementiert
+ist die Bediengeraete-Seite.
+
+### CANbossTouch PoC (`oxivgl_touch_can`)
 
 The FT81x/SPI port of the `rvt50hqsnwc00-b` / `rp2350-touch-lcd-7` hall
 lighting CAN demo. UI strings, button/field layout, CAN IDs, bitrate, and the

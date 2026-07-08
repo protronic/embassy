@@ -1,12 +1,14 @@
 //! CAN press/hold/repeat tasks for the hall touch UI.
 //!
-//! Board-independent FDCAN glue shared with `examples/rvt50hqsnwc00-b` —
-//! keep in sync. On the STM32H573I-DK the frames go out on FDCAN2
-//! (Arduino D3/D15, external transceiver — see [`crate::board::init_can`]).
+//! Ported from `examples/rvt50hqsnwc00-b` (keep the protocol logic in
+//! sync). Diverges from that copy in the transport: frames go through the
+//! shared bus in [`crate::canboss::canbus`] (TX queue + RX router) so the
+//! PoC traffic can coexist with the CANopen SDO client on one FDCAN —
+//! FDCAN2 on the STM32H573I-DK (Arduino D3/D15, external transceiver, see
+//! [`crate::board::init_can`]).
 
 use defmt::{debug, info, warn};
 use embassy_futures::select::{Either, select};
-use embassy_stm32::can::{CanRx, CanTx};
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
@@ -14,9 +16,11 @@ use touch_hall_common::can_bridge::{active_button, handle_minp_frame, payload_is
 use touch_hall_common::can_refresh::CAN_REFRESH_MS;
 use touch_hall_common::rhai_state::Plc;
 use touch_hall_common::{
-    BUTTON_COUNT, CAN_COMMAND_REPEAT_MS, CAN_ENABLED, CAN_RX_DEBOUNCE_MS, CAN_RX_POLL_MS, CAN_TX_ID, LONG_PRESS_MS,
-    MINP_RX_ID, STATE_SCRIPT_ENABLED, button_status, can_input, can_scheduler, input_state, touch_feedback, touch_hold,
+    BUTTON_COUNT, CAN_COMMAND_REPEAT_MS, CAN_ENABLED, CAN_RX_DEBOUNCE_MS, CAN_TX_ID, LONG_PRESS_MS, MINP_RX_ID,
+    STATE_SCRIPT_ENABLED, button_status, can_input, can_scheduler, input_state, touch_feedback, touch_hold,
 };
+
+use crate::canboss::canbus;
 
 const MAX_BUTTONS: usize = 64;
 const MIN_HOLD_BEFORE_RELEASE_MS: u64 = 120;
@@ -45,7 +49,7 @@ pub fn button_status(index: usize) -> bool {
     button_status::plc_active(index)
 }
 
-async fn send_plc_payload(tx: &mut CanTx<'static>, payload: &[u8; 6], refresh: bool) -> bool {
+async fn send_plc_payload(payload: &[u8; 6], refresh: bool) -> bool {
     if payload_is_release(payload)
         && !refresh
         && (touch_hold::is_latched() || input_state::any_held() || active_button().is_some())
@@ -55,7 +59,10 @@ async fn send_plc_payload(tx: &mut CanTx<'static>, payload: &[u8; 6], refresh: b
     log_tx_payload_bytes(payload, refresh);
     let frame = embassy_stm32::can::frame::Frame::new_standard(CAN_TX_ID, payload);
     let ok = match frame {
-        Ok(frame) => tx.write(&frame).await.is_some(),
+        Ok(frame) => {
+            canbus::send(frame).await;
+            true
+        }
         Err(_) => false,
     };
     if ok {
@@ -64,13 +71,13 @@ async fn send_plc_payload(tx: &mut CanTx<'static>, payload: &[u8; 6], refresh: b
     ok
 }
 
-async fn send_plc_cmd(tx: &mut CanTx<'static>, button_index: u8, refresh: bool) -> bool {
-    send_plc_payload(tx, &tx_payload(button_index), refresh).await
+async fn send_plc_cmd(button_index: u8, refresh: bool) -> bool {
+    send_plc_payload(&tx_payload(button_index), refresh).await
 }
 
-async fn send_cycle_output(tx: &mut CanTx<'static>, payload: Option<[u8; 6]>, refresh: bool) {
+async fn send_cycle_output(payload: Option<[u8; 6]>, refresh: bool) {
     if let Some(p) = payload {
-        if !send_plc_payload(tx, &p, refresh).await {
+        if !send_plc_payload(&p, refresh).await {
             warn!("CAN output failed");
         }
     }
@@ -151,14 +158,51 @@ fn log_rx_frame(id: u16, data: &[u8]) {
     );
 }
 
-fn frame_standard_id(frame: &embassy_stm32::can::frame::Frame) -> Option<u16> {
-    match frame.header().id() {
-        embedded_can::Id::Standard(id) => Some(id.as_raw()),
-        _ => None,
+/// Zeitbasis der RX-Entprellung weiterziehen — der RX-Router in
+/// [`crate::canboss::canbus`] ruft das zyklisch auf (ersetzt den
+/// Poll-Anteil des frueheren rx_task).
+pub fn rx_poll_tick() {
+    if !CAN_ENABLED {
+        return;
+    }
+    if can_input::advance_time_ms(Instant::now().as_millis() as u32) {
+        let _ = ACTIONS.try_send(Action::CanRx);
     }
 }
 
-async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
+/// Einen empfangenen Nicht-SDO-Frame verarbeiten (vom RX-Router gerufen).
+///
+/// PLC-Modus: Frame speichern und den TX-Task anstossen; Legacy-Modus:
+/// minp-Frame direkt in den Button-Status uebernehmen.
+pub fn process_rx_frame(id: u16, data: &[u8]) {
+    if !CAN_ENABLED {
+        return;
+    }
+    log_rx_frame(id, data);
+
+    if STATE_SCRIPT_ENABLED {
+        if can_input::store_rx(id, data) {
+            let _ = ACTIONS.try_send(Action::CanRx);
+        }
+        return;
+    }
+
+    let mut scratch = [0u8; MAX_BUTTONS];
+    let mut before = [0u8; MAX_BUTTONS];
+    button_status::snapshot(&mut before, BUTTON_COUNT);
+    scratch[..BUTTON_COUNT].copy_from_slice(&before[..BUTTON_COUNT]);
+
+    if id == MINP_RX_ID {
+        handle_minp_frame(id, data, &mut scratch[..BUTTON_COUNT]);
+    }
+
+    can_scheduler::log_minp_scratch(&before[..BUTTON_COUNT], &scratch[..BUTTON_COUNT]);
+    for (i, value) in scratch.iter().enumerate().take(BUTTON_COUNT) {
+        button_status::store(i, *value);
+    }
+}
+
+async fn plc_tx_loop(mut plc: Plc) {
     let touch_tick = Duration::from_millis(CAN_COMMAND_REPEAT_MS);
     let refresh_every = Duration::from_millis(CAN_REFRESH_MS as u64);
     let mut scratch = [0u8; MAX_BUTTONS];
@@ -168,7 +212,6 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
         match select(ACTIONS.receive(), Timer::after(refresh_every)).await {
             Either::Second(()) => {
                 send_cycle_output(
-                    tx,
                     can_scheduler::on_periodic_refresh(&mut plc, &mut scratch, &tx_state),
                     true,
                 )
@@ -176,12 +219,11 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
             }
             Either::First(first) => match first {
                 Action::CanRx => {
-                    send_cycle_output(tx, can_scheduler::on_can_rx(&mut plc, &mut scratch, &tx_state), false).await;
+                    send_cycle_output(can_scheduler::on_can_rx(&mut plc, &mut scratch, &tx_state), false).await;
                 }
                 Action::Press(index) => {
                     drain_pending_releases();
                     send_cycle_output(
-                        tx,
                         can_scheduler::on_touch_press(&mut plc, &mut scratch, &tx_state, index),
                         false,
                     )
@@ -207,19 +249,14 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
 
                         match select(ACTIONS.receive(), Timer::after(wait)).await {
                             Either::First(Action::CanRx) => {
-                                send_cycle_output(
-                                    tx,
-                                    can_scheduler::on_can_rx(&mut plc, &mut scratch, &tx_state),
-                                    false,
-                                )
-                                .await;
+                                send_cycle_output(can_scheduler::on_can_rx(&mut plc, &mut scratch, &tx_state), false)
+                                    .await;
                             }
                             Either::First(Action::Release) => {
                                 if press_start.elapsed() < Duration::from_millis(MIN_HOLD_BEFORE_RELEASE_MS) {
                                     continue;
                                 }
                                 send_cycle_output(
-                                    tx,
                                     can_scheduler::on_touch_release(
                                         &mut plc,
                                         &mut scratch,
@@ -236,7 +273,6 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
                                     press_start = Instant::now();
                                     long_fired = false;
                                     send_cycle_output(
-                                        tx,
                                         can_scheduler::on_touch_switch(
                                             &mut plc,
                                             &mut scratch,
@@ -257,7 +293,6 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
                                 press_start = Instant::now();
                                 long_fired = false;
                                 send_cycle_output(
-                                    tx,
                                     can_scheduler::on_touch_switch(&mut plc, &mut scratch, &tx_state, prev, new_index),
                                     false,
                                 )
@@ -266,7 +301,6 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
                             Either::Second(()) => {
                                 if Instant::now() >= next_refresh {
                                     send_cycle_output(
-                                        tx,
                                         can_scheduler::on_periodic_refresh(&mut plc, &mut scratch, &tx_state),
                                         false,
                                     )
@@ -274,7 +308,6 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
                                     next_refresh = Instant::now() + refresh_every;
                                 } else {
                                     send_cycle_output(
-                                        tx,
                                         can_scheduler::on_touch_hold_tick(
                                             &mut plc,
                                             &mut scratch,
@@ -292,19 +325,14 @@ async fn plc_tx_loop(tx: &mut CanTx<'static>, mut plc: Plc) {
                     }
                 }
                 Action::Release => {
-                    send_cycle_output(
-                        tx,
-                        can_scheduler::on_idle_release(&mut plc, &mut scratch, &tx_state),
-                        false,
-                    )
-                    .await;
+                    send_cycle_output(can_scheduler::on_idle_release(&mut plc, &mut scratch, &tx_state), false).await;
                 }
             },
         }
     }
 }
 
-async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
+async fn legacy_tx_loop() {
     let tick = Duration::from_millis(CAN_COMMAND_REPEAT_MS);
     let refresh_every = Duration::from_millis(CAN_REFRESH_MS as u64);
 
@@ -312,7 +340,7 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
         match select(ACTIONS.receive(), Timer::after(refresh_every)).await {
             Either::Second(()) => {
                 if let Some(payload) = touch_hall_common::can_refresh::idle_refresh_payload() {
-                    let _ = send_plc_payload(tx, &payload, true).await;
+                    let _ = send_plc_payload(&payload, true).await;
                 }
             }
             Either::First(first) => match first {
@@ -320,7 +348,7 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
                 Action::Press(index) => {
                     drain_pending_releases();
                     can_scheduler::touch_begin(index);
-                    let _ = send_plc_cmd(tx, index, false).await;
+                    let _ = send_plc_cmd(index, false).await;
 
                     let mut press_start = Instant::now();
                     let mut long_fired = false;
@@ -334,14 +362,14 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
                                     continue;
                                 }
                                 can_scheduler::touch_end(held, long_fired);
-                                let _ = send_plc_cmd(tx, 255, true).await;
+                                let _ = send_plc_cmd(255, true).await;
                                 if let Some(new_index) = wait_touch_resume().await {
                                     let prev = held;
                                     held = new_index;
                                     can_scheduler::touch_switch(prev, new_index);
                                     press_start = Instant::now();
                                     long_fired = false;
-                                    let _ = send_plc_cmd(tx, new_index, false).await;
+                                    let _ = send_plc_cmd(new_index, false).await;
                                 } else {
                                     break;
                                 }
@@ -352,7 +380,7 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
                                 can_scheduler::touch_switch(prev, new_index);
                                 press_start = Instant::now();
                                 long_fired = false;
-                                let _ = send_plc_cmd(tx, new_index, false).await;
+                                let _ = send_plc_cmd(new_index, false).await;
                             }
                             Either::Second(()) => {
                                 can_scheduler::touch_maybe_long(
@@ -360,7 +388,7 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
                                     press_start.elapsed().as_millis() as u64,
                                     &mut long_fired,
                                 );
-                                let _ = send_plc_cmd(tx, held, false).await;
+                                let _ = send_plc_cmd(held, false).await;
                             }
                         }
                     }
@@ -370,7 +398,7 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
                         continue;
                     }
                     touch_hall_common::can_bridge::set_active_button(None);
-                    let _ = send_plc_cmd(tx, 255, false).await;
+                    let _ = send_plc_cmd(255, false).await;
                 }
             },
         }
@@ -378,7 +406,7 @@ async fn legacy_tx_loop(tx: &mut CanTx<'static>) {
 }
 
 #[embassy_executor::task]
-pub async fn tx_task(tx: &'static mut CanTx<'static>) {
+pub async fn tx_task() {
     if !CAN_ENABLED {
         info!("CAN disabled in config — UI only");
         loop {
@@ -393,6 +421,10 @@ pub async fn tx_task(tx: &'static mut CanTx<'static>) {
         "CAN TX: id=0x{:03x}, repeat={}ms, refresh={}ms idle (00×6), long_press={}ms",
         CAN_TX_ID, CAN_COMMAND_REPEAT_MS, CAN_REFRESH_MS, LONG_PRESS_MS,
     );
+    info!(
+        "CAN RX: minp id=0x{:03x}, debounce={}ms",
+        MINP_RX_ID, CAN_RX_DEBOUNCE_MS
+    );
 
     if STATE_SCRIPT_ENABLED {
         let Some(plc) = Plc::new() else {
@@ -402,92 +434,8 @@ pub async fn tx_task(tx: &'static mut CanTx<'static>) {
             }
         };
         info!("PLC scan cycle active (fn cycle)");
-        plc_tx_loop(tx, plc).await;
+        plc_tx_loop(plc).await;
     } else {
-        legacy_tx_loop(tx).await;
-    }
-}
-
-async fn plc_rx_loop(rx: &mut CanRx<'static>) {
-    let poll = Duration::from_millis(CAN_RX_POLL_MS);
-
-    loop {
-        if can_input::advance_time_ms(Instant::now().as_millis() as u32) {
-            let _ = ACTIONS.try_send(Action::CanRx);
-        }
-
-        match select(rx.read(), Timer::after(poll)).await {
-            Either::First(Ok(envelope)) => {
-                let (frame, _) = envelope.parts();
-                if let Some(id) = frame_standard_id(&frame) {
-                    let data = frame.data();
-                    log_rx_frame(id, data);
-                    if can_input::store_rx(id, data) {
-                        let _ = ACTIONS.try_send(Action::CanRx);
-                    }
-                }
-            }
-            Either::First(Err(_)) => {}
-            Either::Second(()) => {}
-        }
-    }
-}
-
-async fn legacy_rx_loop(rx: &mut CanRx<'static>) {
-    let mut scratch = [0u8; MAX_BUTTONS];
-    let poll = Duration::from_millis(CAN_RX_POLL_MS);
-
-    loop {
-        if can_input::advance_time_ms(Instant::now().as_millis() as u32) {
-            let _ = ACTIONS.try_send(Action::CanRx);
-        }
-
-        match select(rx.read(), Timer::after(poll)).await {
-            Either::First(Ok(envelope)) => {
-                let (frame, _) = envelope.parts();
-                if let Some(id) = frame_standard_id(&frame) {
-                    let data = frame.data();
-                    log_rx_frame(id, data);
-
-                    let mut before = [0u8; MAX_BUTTONS];
-                    button_status::snapshot(&mut before, BUTTON_COUNT);
-                    for (i, value) in scratch.iter_mut().enumerate().take(BUTTON_COUNT) {
-                        *value = before[i];
-                    }
-
-                    if id == MINP_RX_ID {
-                        handle_minp_frame(id, data, &mut scratch[..BUTTON_COUNT]);
-                    }
-
-                    can_scheduler::log_minp_scratch(&before[..BUTTON_COUNT], &scratch[..BUTTON_COUNT]);
-                    for (i, value) in scratch.iter().enumerate().take(BUTTON_COUNT) {
-                        button_status::store(i, *value);
-                    }
-                }
-            }
-            Either::First(Err(_)) => {}
-            Either::Second(()) => {}
-        }
-    }
-}
-
-#[embassy_executor::task]
-pub async fn rx_task(rx: &'static mut CanRx<'static>) {
-    if !CAN_ENABLED {
-        loop {
-            Timer::after_secs(60).await;
-        }
-    }
-
-    info!(
-        "CAN RX: minp id=0x{:03x}, debounce={}ms",
-        MINP_RX_ID, CAN_RX_DEBOUNCE_MS
-    );
-
-    if STATE_SCRIPT_ENABLED {
-        info!("PLC scan cycle active (fn cycle)");
-        plc_rx_loop(rx).await;
-    } else {
-        legacy_rx_loop(rx).await;
+        legacy_tx_loop().await;
     }
 }

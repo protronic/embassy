@@ -1,0 +1,21 @@
+{
+  "_comment": "CAN-Netzwerkbeschreibung fuer den EDS->LVGL-Generator (tools/eds2lvgl.py). Pro Knoten: node_id (1..127), Anzeigename, EDS-Datei in diesem Verzeichnis, optional include-Indexbereiche (Default: 0x1000-0x1001, 0x1008-0x100A, 0x2000-0x9FFF).",
+  "nodes": [
+    {
+      "node_id": 16,
+      "name": "IO-Modul",
+      "eds": "demo_io.eds"
+    },
+    {
+      "node_id": 32,
+      "name": "Antrieb",
+      "eds": "demo_drive.eds"
+    },
+    {
+      "node_id": 48,
+      "name": "DS301 Geraet",
+      "eds": "DS301_profile.eds",
+      "include": ["0x1000-0x1001", "0x1008-0x100A", "0x1017"]
+    }
+  ]
+}
