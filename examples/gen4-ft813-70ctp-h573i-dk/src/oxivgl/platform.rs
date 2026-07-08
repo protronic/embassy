@@ -32,8 +32,8 @@ use crate::oxivgl::widget_view::WidgetView;
 
 /// LVGL timer tick — run the handler ~4× per LVGL refresh period.
 const LVGL_TICK_MS: u64 = LV_DEF_REFR_PERIOD as u64 / 4;
-const PRESENT_PERIOD_MS: u64 = 33;
-const UI_TICK_MS: u64 = 5;
+pub(crate) const PRESENT_PERIOD_MS: u64 = 33;
+pub(crate) const UI_TICK_MS: u64 = 5;
 const PRESENT_LVGL_TICKS: usize = 4;
 
 /// Number of display lines covered by each LVGL partial stripe buffer.
@@ -57,7 +57,7 @@ static FIRST_TOUCH_UI_LOGGED: AtomicBool = AtomicBool::new(false);
 /// Returns `true` while pressed and on the press→release edge so the caller
 /// can run a present batch (matching the queue-drain semantics of the other
 /// gen4 ports).
-fn poll_touch(touch: &TouchInput, last_pressed: &mut bool) -> bool {
+pub(crate) fn poll_touch(touch: &TouchInput, last_pressed: &mut bool) -> bool {
     // SAFETY: called from the single UI task only (with_eve contract).
     let point = match unsafe { display::with_eve(|eve| eve.touch()) } {
         Some(Ok(point)) => point,
@@ -91,7 +91,12 @@ fn poll_touch(touch: &TouchInput, last_pressed: &mut bool) -> bool {
     had_touch
 }
 
-async fn lvgl_present_batch(driver: &LvglDriver, view: &mut WidgetView, touch: &TouchInput, last_pressed: &mut bool) {
+pub(crate) async fn lvgl_present_batch<V: View>(
+    driver: &LvglDriver,
+    view: &mut V,
+    touch: &TouchInput,
+    last_pressed: &mut bool,
+) {
     for _ in 0..PRESENT_LVGL_TICKS {
         let _ = poll_touch(touch, last_pressed);
         driver.timer_handler();

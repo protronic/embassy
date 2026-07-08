@@ -32,6 +32,17 @@ panel hangs off a 4-wire SPI bus instead of a parallel RGB interface.
 
 Use a **gen4-PA** or **gen4-IB** breakout for the 30-way FFC. Logic is 3.3 V.
 
+### CAN wiring (`oxivgl_touch_can` only)
+
+FDCAN2 is on the same Arduino header; the DK has **no on-board CAN
+transceiver**, so wire an external 3.3 V transceiver (SN65HVD230,
+TJA1051T/3, …) between the MCU pins and the bus:
+
+| Signal | Arduino | MCU pin | Function |
+|--------|---------|---------|----------|
+| CAN RX | D3      | PB5     | FDCAN2_RX (← transceiver RXD) |
+| CAN TX | D15     | PB6     | FDCAN2_TX (→ transceiver TXD) |
+
 ## Architecture
 
 ```text
@@ -70,10 +81,25 @@ cargo run --release --bin ft813_selftest
 
 # OxivGL (C LVGL) widget demo
 cargo run --release --bin oxivgl_widget_demo --features oxivgl-demo
+
+# CANbossTouch: JSON-driven hall lighting UI + CAN press/hold/repeat (FDCAN2)
+cargo run --release --bin oxivgl_touch_can --features oxivgl-demo
 ```
 
 `ft813_selftest` paints eight colour bars and logs touch coordinates — run it
 first to verify wiring and FT813 bring-up without the C stack.
+
+### CANbossTouch (`oxivgl_touch_can`)
+
+The FT81x/SPI port of the `rvt50hqsnwc00-b` / `rp2350-touch-lcd-7` hall
+lighting CAN demo. UI strings, button/field layout, CAN IDs, bitrate, and the
+optional Rhai state script are generated at build time from
+`examples/touch-projects/Demo/{hall,can}_config.json` (pick another project
+directory with the `TOUCH_PROJECT` env var — see
+`examples/touch-projects/README`-files). Button presses/holds/releases are
+translated into the CAN bitmask protocol from `examples/touch-hall-common`
+on FDCAN2, and incoming `minp` frames drive the button highlight state
+(optionally through the `state.rhai` PLC scan cycle).
 
 ### OxivGL notes
 

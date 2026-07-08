@@ -12,13 +12,23 @@
 //! | PD (power-down) | D9      | PA8     | GPIO out      |
 //! | INT             | D8      | PG8     | unused (poll) |
 //!
+//! CAN (`oxivgl_touch_can`) uses FDCAN2, also on the Arduino header:
+//!
+//! | Signal    | Arduino | MCU pin | Function  |
+//! |-----------|---------|---------|-----------|
+//! | CAN RX    | D3      | PB5     | FDCAN2_RX |
+//! | CAN TX    | D15     | PB6     | FDCAN2_TX |
+//!
+//! The DK has no on-board CAN transceiver — wire an external 3.3 V
+//! transceiver (e.g. SN65HVD230, TJA1051T/3) between PB5/PB6 and the bus.
+//!
 //! Power: the gen4 module needs 5 V (backlight boost); logic is 3.3 V.
 
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::peripherals::{PA3, PA8, PB15, PI1, PI2, SPI2};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::Hertz;
-use embassy_stm32::{Config, Peri};
+use embassy_stm32::{Config, Peri, bind_interrupts, can, peripherals};
 
 use crate::ft81x::Ft81x;
 pub use crate::ft81x::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
@@ -30,11 +40,17 @@ pub const SPI_INIT_HZ: u32 = 8_000_000;
 /// kernel clock the divider lands on 250/16 = 15.625 MHz on the wire.
 pub const SPI_RUN_HZ: u32 = 30_000_000;
 
+bind_interrupts!(pub struct CanIrqs {
+    FDCAN2_IT0 => can::IT0InterruptHandler<peripherals::FDCAN2>;
+    FDCAN2_IT1 => can::IT1InterruptHandler<peripherals::FDCAN2>;
+});
+
 /// RCC setup: HSE 25 MHz crystal → PLL1 → 250 MHz sysclk (voltage scale 0).
 /// PLL1Q also runs at 250 MHz and feeds SPI2 (reset kernel-clock mux).
+/// FDCAN1/2 run straight off the 25 MHz HSE for clean CAN bit timings.
 pub fn config() -> Config {
     use embassy_stm32::rcc::{
-        AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sysclk, VoltageScale,
+        AHBPrescaler, APBPrescaler, Hse, HseMode, Pll, PllDiv, PllMul, PllPreDiv, PllSource, Sysclk, VoltageScale, mux,
     };
 
     let mut config = Config::default();
@@ -57,7 +73,22 @@ pub fn config() -> Config {
     config.rcc.apb3_pre = APBPrescaler::Div1;
     config.rcc.sys = Sysclk::Pll1P;
     config.rcc.voltage_scale = VoltageScale::Scale0;
+    config.rcc.mux.fdcan12sel = mux::Fdcansel::Hse;
     config
+}
+
+/// Create an FDCAN2 configurator on the Arduino-header CAN pins
+/// (D3 = PB5 = `FDCAN2_RX`, D15 = PB6 = `FDCAN2_TX`).
+///
+/// The STM32H573I-DK has no on-board CAN transceiver; an external 3.3 V
+/// transceiver must sit between these pins and the bus. Call
+/// `set_bitrate(..)` and `into_normal_mode()` on the returned configurator.
+pub fn init_can(
+    fdcan: Peri<'static, peripherals::FDCAN2>,
+    rx: Peri<'static, impl can::RxPin<peripherals::FDCAN2>>,
+    tx: Peri<'static, impl can::TxPin<peripherals::FDCAN2>>,
+) -> can::CanConfigurator<'static> {
+    can::CanConfigurator::new(fdcan, rx, tx, CanIrqs)
 }
 
 /// Set up SPI2 + CS/PD pins and return the (not yet initialised) FT813
