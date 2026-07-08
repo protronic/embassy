@@ -11,6 +11,7 @@ use oxivgl::style::Selector;
 use oxivgl::view::{NavAction, View, register_event_on};
 use oxivgl::widgets::{AsLvHandle, Button, Label, Obj, TextAlign, WidgetError};
 
+#[cfg(target_os = "none")]
 use super::hall::HallScreenView;
 use super::node::NodeView;
 use super::{ACCENT, BORDER, CARD_BG, MUTED, SCREEN_BG, SURFACE, TEXT};
@@ -25,6 +26,8 @@ const ROW_STEP: i32 = 74;
 
 enum Target {
     Node(&'static NodeDesc),
+    /// PoC-Hallenlicht — nur auf dem Embedded-Ziel (Host-Port ohne CAN-PoC).
+    #[cfg(target_os = "none")]
     Hall,
 }
 
@@ -59,7 +62,7 @@ impl View for MenuView {
             .pad(0);
         let title = Label::new(&header)?;
         title
-            .text("CANbossTouch — CANopen Netzwerk")
+            .text("CANbossTouch - CANopen Netzwerk")
             .pos(20, 16)
             .width(760)
             .text_color(TEXT)
@@ -68,13 +71,15 @@ impl View for MenuView {
         self.labels.push(title);
         self.objects.push(header);
 
-        // Ein Eintrag je Knoten + PoC-Hallenlicht
+        // Ein Eintrag je Knoten + (nur Embedded) PoC-Hallenlicht
+        #[allow(unused_mut)]
         let mut row = 0;
         for node in NODES {
             let text = format!("Node {}  {}  ({} Datenpunkte)", node.node_id, node.name, node.dps.len());
             self.add_row(container, row, &text, Target::Node(node))?;
             row += 1;
         }
+        #[cfg(target_os = "none")]
         self.add_row(container, row, "Hallenlicht (PoC)", Target::Hall)?;
 
         container.update_layout();
@@ -98,6 +103,7 @@ impl View for MenuView {
         };
         match self.targets.get(idx) {
             Some(Target::Node(node)) => NavAction::push(NodeView::new(node), None),
+            #[cfg(target_os = "none")]
             Some(Target::Hall) => NavAction::push(HallScreenView::default(), None),
             None => NavAction::None,
         }

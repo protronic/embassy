@@ -30,6 +30,15 @@ pub async fn send(frame: Frame) {
     TX_QUEUE.send(frame).await;
 }
 
+/// Rohes 11-Bit-Standard-Frame einreihen (vom SDO-Client genutzt, damit der
+/// die embassy-Frame-Konstruktion nicht kennt — der Host-Port stellt hier
+/// stattdessen den Mock-Server bereit).
+pub async fn send_request_raw(id: u16, payload: &[u8; 8]) -> Result<(), ()> {
+    let frame = Frame::new_standard(id, payload).map_err(|_| ())?;
+    send(frame).await;
+    Ok(())
+}
+
 #[embassy_executor::task]
 pub async fn tx_pump_task(tx: &'static mut CanTx<'static>) -> ! {
     loop {

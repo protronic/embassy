@@ -10,7 +10,6 @@
 use core::cell::RefCell;
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use embassy_stm32::can::frame::Frame;
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
@@ -185,9 +184,12 @@ const ABORT_TIMEOUT: u32 = 0;
 const ABORT_GENERAL: u32 = 0x0800_0000;
 
 async fn send_request(node_id: u8, payload: &[u8; 8]) -> Result<(), u32> {
-    let frame = Frame::new_standard(0x600 + node_id as u16, payload).map_err(|_| ABORT_GENERAL)?;
-    super::canbus::send(frame).await;
-    Ok(())
+    // RSDO (Empfangs-SDO des Servers) = 0x600 + NodeID; die Frame-
+    // Konstruktion liegt im plattformspezifischen `canbus` (Firmware:
+    // embassy-FDCAN, Host: Mock-Server), damit dieser Client geteilt bleibt.
+    super::canbus::send_request_raw(0x600 + node_id as u16, payload)
+        .await
+        .map_err(|_| ABORT_GENERAL)
 }
 
 /// Naechste Antwort dieses Knotens abwarten (fremde NodeIDs verwerfen).

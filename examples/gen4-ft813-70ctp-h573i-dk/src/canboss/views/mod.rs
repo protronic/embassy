@@ -4,6 +4,10 @@
 //! [`menu::MenuView`] (Root) → [`node::NodeView`] je CANopen-Knoten bzw.
 //! [`hall::HallScreenView`] (PoC-Hallenlicht).
 
+// Der PoC-Hall-Wrapper zieht `crate::oxivgl::hall_view` + `crate::touch_can`
+// (embassy-FDCAN) nach — nur auf dem Embedded-Ziel verfuegbar. Der Host-Port
+// (examples/canboss-touch-host) baut Menue + Knoten-Screens ohne ihn.
+#[cfg(target_os = "none")]
 pub mod hall;
 pub mod menu;
 pub mod node;
