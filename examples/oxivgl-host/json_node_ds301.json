@@ -1,0 +1,42 @@
+{
+  "_comment": "Same host node, but the object dictionary is imported from the CANopenNode / CANopenEditor JSON export (od/DS301_profile.json, exported from CANopenNode's example DS301 profile). 'include' filters the index ranges shown; $NODEID defaults resolve against node_id. The init script enables the CANopen producer heartbeat via 0x1017.",
+  "node_id": 48,
+  "name": "DS301 Geraet",
+  "description": "Object dictionary from CANopenNode JSON export, driven by Rhai scripts",
+  "can": {
+    "mode": "socketcan",
+    "channel": "vcan0",
+    "tpdo": "0x180",
+    "rpdo": "0x200",
+    "heartbeat": true
+  },
+  "od_file": "od/DS301_profile.json",
+  "include": ["0x1000-0x1001", "0x1005", "0x1014", "0x1017"],
+  "scripts": [
+    {
+      "name": "init",
+      "run": "once",
+      "script": [
+        "print(\"node '\" + node_name() + \"' (id \" + node_id() + \") started\");",
+        "od_dump();",
+        "od_write(0x1017, 0, 1000);"
+      ]
+    },
+    {
+      "name": "error_blink",
+      "run": "cyclic",
+      "period_ms": 1000,
+      "script": [
+        "od_write(0x1001, 0, (od_read(0x1001, 0) + 1) % 4);"
+      ]
+    },
+    {
+      "name": "status",
+      "run": "cyclic",
+      "period_ms": 2000,
+      "script": [
+        "print(\"uptime=\" + uptime_ms() / 1000 + \"s error_register=\" + od_read(0x1001, 0) + \" hb=\" + od_read(0x1017, 0) + \"ms\");"
+      ]
+    }
+  ]
+}
