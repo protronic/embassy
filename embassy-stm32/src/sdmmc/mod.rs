@@ -14,7 +14,7 @@ use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use sdio_host::Cmd;
 use sdio_host::common_cmd::{self, R1, R2, Resp, ResponseLen, Rz};
-use sdio_host::sd::{BusWidth, CID, CSD, CardStatus};
+use sdio_host::sd::{CID, CSD, CardStatus};
 #[cfg(sdmmc_uhs)]
 use sdio_host::sd_cmd;
 
@@ -37,11 +37,8 @@ use crate::wait::block_for_us;
 use crate::wait::{try_until, wait_for_us};
 use crate::{interrupt, peripherals};
 
-/// Module for SD and EMMC cards
+/// Deprecated module for SD and EMMC cards
 pub mod sd;
-
-/// Module for SDIO interface
-pub mod sdio;
 
 #[cfg(sdmmc_dlyb)]
 mod dlyb;
@@ -303,12 +300,11 @@ fn clk_div(ker_ck: Hertz, sdmmc_ck: Hertz) -> Result<(bool, u8, Hertz), Error> {
     Ok((false, clk_div, clk_f))
 }
 
-fn bus_width_vals(bus_width: BusWidth) -> (u8, u32) {
+fn bus_width_vals(bus_width: ::sdio::BusWidth) -> (u8, u32) {
     match bus_width {
-        BusWidth::One => (0, 1u32),
-        BusWidth::Four => (1, 4u32),
-        BusWidth::Eight => (2, 8u32),
-        _ => panic!("Invalid Bus Width"),
+        ::sdio::BusWidth::W1 => (0, 1u32),
+        ::sdio::BusWidth::W4 => (1, 4u32),
+        ::sdio::BusWidth::W8 => (2, 8u32),
     }
 }
 
@@ -1216,14 +1212,6 @@ impl<'d> Sdmmc<'d> {
         while self.data_active() || self.cmd_active() {}
     }
 
-    fn bus_width(&self) -> BusWidth {
-        match (self.d3.is_some(), self.d7.is_some()) {
-            (true, true) => BusWidth::Eight,
-            (true, false) => BusWidth::Four,
-            _ => BusWidth::One,
-        }
-    }
-
     /// # Safety
     ///
     /// `buffer` must be valid for the whole transfer and word aligned
@@ -1388,7 +1376,7 @@ impl<'d> Sdmmc<'d> {
     fn init_idle(&mut self) -> Result<CommandResponse<Rz>, Error> {
         let regs = self.info.regs;
 
-        self.clkcr_set_clkdiv(SD_INIT_FREQ, BusWidth::One)?;
+        self.clkcr_set_clkdiv(SD_INIT_FREQ, ::sdio::BusWidth::W1)?;
         regs.dtimer()
             .write(|w| w.set_datatime(self.config.data_transfer_timeout));
 
@@ -1401,7 +1389,7 @@ impl<'d> Sdmmc<'d> {
     }
 
     /// Sets the CLKDIV field in CLKCR. Updates clock field in self
-    fn clkcr_set_clkdiv(&mut self, freq: Hertz, width: BusWidth) -> Result<(), Error> {
+    fn clkcr_set_clkdiv(&mut self, freq: Hertz, width: ::sdio::BusWidth) -> Result<(), Error> {
         let regs = self.info.regs;
 
         let (widbus, width_u32) = bus_width_vals(width);
@@ -1840,9 +1828,16 @@ impl<'d> Sdmmc<'d> {
             return Err(MmcError::Crc);
         }
 
+        // The `sdio` crate's `Response::from_words` expects little-endian words
+        // (buf[0] = least-significant word). The STM32 RESPx registers are big-endian:
+        // for a long (R2/R136) response respr(0) = RESP1 = most-significant [127:96].
+        // Reverse the word order so multi-word responses (CID/CSD) assemble correctly —
+        // otherwise CSD_STRUCTURE/C_SIZE are mis-parsed and the reported card size is wrong.
+        // (Single-word R48 responses are unaffected: n = 1 → buf[0] = respr(0).)
         let mut buf = [0u32; 4];
-        for i in 0..R::LEN.words() {
-            buf[i] = self.info.regs.respr(i).read().cardstatus();
+        let n = R::LEN.words();
+        for i in 0..n {
+            buf[i] = self.info.regs.respr(n - 1 - i).read().cardstatus();
         }
 
         Ok(::sdio::Response::from_words(&buf))
@@ -1965,18 +1960,21 @@ impl<'d> MmcBus for Sdmmc<'d> {
     }
 
     fn supports_bus_width(&self) -> ::sdio::BusWidth {
-        match self.bus_width() {
-            BusWidth::One => ::sdio::BusWidth::W1,
-            BusWidth::Four => ::sdio::BusWidth::W4,
-            BusWidth::Eight => ::sdio::BusWidth::W8,
+        match (self.d3.is_some(), self.d7.is_some()) {
+            (true, true) => ::sdio::BusWidth::W8,
+            (true, false) => ::sdio::BusWidth::W4,
             _ => ::sdio::BusWidth::W1,
         }
     }
 
     fn supports_frequency(&self) -> u32 {
-        if self.uhs_active() && self.has_dlyb() {
+        // Report the bus *capability* (from the tuning hardware wired up at construction),
+        // not the runtime UHS state. The sdio layer clamps the requested frequency against
+        // this value BEFORE the 1.8 V UHS switch, so gating on `uhs_active()` (still false at
+        // that point) capped every request to 50 MHz and made SDR50/SDR104 unreachable.
+        if self.has_dlyb() {
             208_000_000
-        } else if self.uhs_active() && (self.has_ckin() || self.has_dlyb()) {
+        } else if self.has_ckin() {
             100_000_000
         } else {
             50_000_000
@@ -2010,7 +2008,14 @@ impl<'d> MmcBus for Sdmmc<'d> {
     }
 
     async fn init_idle(&mut self, hz: u32) -> Result<(), ::sdio::MmcError> {
-        self.clkcr_set_clkdiv(Hertz(hz), BusWidth::One)
+        // Re-init must start from 3.3V / SDR12. After a successful UHS
+        // negotiation a previous `acquire` would have left the level
+        // shifter at 1.8V and `CLKCR.busspeed` / `CLKCR.selclkrx` set —
+        // a freshly inserted card would then see UHS timing at 400 kHz
+        // and fail CMD8. No-op outside `cfg(sdmmc_uhs)`.
+        self.reset_uhs_state();
+
+        self.clkcr_set_clkdiv(Hertz(hz), ::sdio::BusWidth::W1)
             .map_err(|_| MmcError::Other)?;
 
         self.info
@@ -2024,16 +2029,10 @@ impl<'d> MmcBus for Sdmmc<'d> {
     }
 
     #[cfg(sdmmc_dlyb)]
-    async fn tune_bus<O>(&mut self, width: ::sdio::BusWidth, hz: u32, op: &mut O) -> Result<(), MmcError>
+    async fn tune_bus<O>(&mut self, bus_width: ::sdio::BusWidth, hz: u32, op: &mut O) -> Result<(), MmcError>
     where
         O: ::sdio::TuningOp,
     {
-        let bus_width = match width {
-            ::sdio::BusWidth::W1 => BusWidth::One,
-            ::sdio::BusWidth::W4 => BusWidth::Four,
-            ::sdio::BusWidth::W8 => BusWidth::Eight,
-        };
-
         let freq = hz;
 
         if self.dlyb_enable_lock().is_err() {
@@ -2084,21 +2083,13 @@ impl<'d> MmcBus for Sdmmc<'d> {
     }
 
     #[cfg(not(sdmmc_dlyb))]
-    async fn tune_bus<O>(&mut self, width: ::sdio::BusWidth, hz: u32, _op: &mut O) -> Result<(), MmcError>
+    async fn tune_bus<O>(&mut self, bus_width: ::sdio::BusWidth, hz: u32, _op: &mut O) -> Result<(), MmcError>
     where
         O: ::sdio::TuningOp,
     {
-        let bus_width = match width {
-            ::sdio::BusWidth::W1 => BusWidth::One,
-            ::sdio::BusWidth::W4 => BusWidth::Four,
-            ::sdio::BusWidth::W8 => BusWidth::Eight,
-        };
-
-        let freq = hz;
-
-        if freq > 50_000_000 {
+        if hz > 50_000_000 {
             self.set_feedback_clk(true);
-            self.clkcr_set_clkdiv(Hertz(freq), bus_width)
+            self.clkcr_set_clkdiv(Hertz(hz), bus_width)
                 .map_err(|_| MmcError::Other)?;
         }
 
@@ -2106,12 +2097,6 @@ impl<'d> MmcBus for Sdmmc<'d> {
     }
 
     fn set_bus(&mut self, width: ::sdio::BusWidth, hz: u32) -> Result<(), ::sdio::MmcError> {
-        let width = match width {
-            ::sdio::BusWidth::W1 => BusWidth::One,
-            ::sdio::BusWidth::W4 => BusWidth::Four,
-            ::sdio::BusWidth::W8 => BusWidth::Eight,
-        };
-
         self.clkcr_set_clkdiv(Hertz(hz), width).map_err(|_| MmcError::Other)
     }
 
