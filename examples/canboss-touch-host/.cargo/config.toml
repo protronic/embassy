@@ -1,0 +1,7 @@
+[env]
+# JSON-Touch-Projekt (nur informativ auf dem Host — die PoC-Hall ist im
+# Host-Port ausgeblendet, gerendert werden Menue + Knoten-Screens).
+TOUCH_PROJECT = "Demo"
+# LVGL-Konfig mit LV_USE_SDL 1 (Kopie der gen4-Konfig) + Latin-Fonts.
+DEP_LV_CONFIG_PATH = { value = "conf", relative = true }
+LVGL_FONTS_DIR = { value = "../gen4-ft813-70ctp-h573i-dk/fonts", relative = true }

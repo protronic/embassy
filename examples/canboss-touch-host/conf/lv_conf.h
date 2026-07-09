@@ -1,3 +1,5 @@
+/* Host-Variante der gen4-FT813-Konfig: LV_USE_SDL 1, groesserer Pool.
+ * Kopie von ../gen4-ft813-70ctp-h573i-dk/conf/lv_conf.h — Aenderungen dort nachziehen. */
 /**
  * @file lv_conf.h
  * Configuration file for LVGL v9.5.0 (alternator-regulator project)
@@ -28,7 +30,7 @@
 
 /* LVGL built-in heap pool size. Kept modest so it fits alongside the 2×96 KiB
  * PIO scan-out bounce buffers within the RP2350B's 520 KiB SRAM. */
-#define LV_MEM_SIZE (128 * 1024U)
+#define LV_MEM_SIZE (16 * 1024 * 1024U) /* Host: Platz fuer Snapshots */
 
 /*====================
    HAL SETTINGS
@@ -357,7 +359,7 @@
  *==================*/
 
 #ifdef __xtensa__
-#define LV_USE_SNAPSHOT 0
+#define LV_USE_SNAPSHOT 1
 #else
 #define LV_USE_SNAPSHOT 1
 #endif
@@ -386,11 +388,12 @@
  *==================*/
 
 #if defined(__xtensa__) || defined(__ARM_ARCH) || !defined(__linux__)
-#define LV_USE_SDL              0
+#define LV_USE_SDL              1
 #else
 #define LV_USE_SDL              1
 #define LV_SDL_RENDER_MODE      LV_DISPLAY_RENDER_MODE_DIRECT
 #define LV_SDL_BUF_COUNT        2
+#define LV_SDL_ACCELERATED      0
 #define LV_SDL_DIRECT_EXIT      1
 #endif
 #define LV_USE_X11              0
