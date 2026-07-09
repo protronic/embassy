@@ -99,6 +99,9 @@ const CSPREAD: u8 = 0; // clock spreading off (1 seemed to worsen touch on this 
 
 /// `RECTS` primitive selector for [`dl_begin`].
 pub const RECTS: u32 = 9;
+/// `POINTS` primitive selector for [`dl_begin`] (filled circles, radius set by
+/// [`dl_point_size`]).
+pub const POINTS: u32 = 2;
 /// `CMD_TEXT` option: centre the string on the given anchor point
 /// (`OPT_CENTERX | OPT_CENTERY`).
 pub const OPT_CENTER: u16 = 0x0600;
@@ -128,6 +131,10 @@ pub const fn dl_vertex_format(frac: u8) -> u32 {
 /// `VERTEX2F(x, y)` — a vertex in the units set by [`dl_vertex_format`].
 pub const fn dl_vertex2f(x: i16, y: i16) -> u32 {
     (1 << 30) | ((x as u32 & 0x7FFF) << 15) | (y as u32 & 0x7FFF)
+}
+/// `POINT_SIZE(radius)` — radius of [`POINTS`] in 1/16 pixel.
+pub const fn dl_point_size(radius: u16) -> u32 {
+    0x0D00_0000 | (radius as u32 & 0x1FFF)
 }
 const fn dl_bitmap_handle(h: u32) -> u32 {
     0x0500_0000 | (h & 0x1F)
