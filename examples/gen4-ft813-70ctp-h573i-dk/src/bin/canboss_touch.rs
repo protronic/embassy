@@ -85,6 +85,9 @@ async fn main(spawner: Spawner) -> ! {
     unwrap!(eve.clear_framebuffer(0x0000));
     unwrap!(eve.show_framebuffer());
     eve.set_spi_frequency(board::SPI_RUN_HZ);
+    // Enable the pixel clock last, after the final SPI speed (see
+    // `Ft81x::enable_display`), otherwise the panel stays dark.
+    unwrap!(eve.enable_display());
     unwrap!(eve.set_backlight(96));
 
     // FDCAN2: gemeinsamer Bus fuer SDO-Client und PoC-Hallenlicht
