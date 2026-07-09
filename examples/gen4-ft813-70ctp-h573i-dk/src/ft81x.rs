@@ -36,8 +36,13 @@ pub const FRAME_BYTES: usize = LINE_STRIDE * DISPLAY_HEIGHT;
 /// Graphics RAM (1 MiB) — holds the RGB565 framebuffer at offset 0.
 pub const RAM_G: u32 = 0x00_0000;
 const RAM_DL: u32 = 0x30_0000;
+/// Co-processor command ring buffer (4 KiB).
+const RAM_CMD: u32 = 0x30_8000;
+const RAM_CMD_SIZE: u16 = 4096;
 
 const REG_ID: u32 = 0x30_2000;
+const REG_FRAMES: u32 = 0x30_2004;
+const REG_CLOCK: u32 = 0x30_2008;
 const REG_CPURESET: u32 = 0x30_2020;
 const REG_HCYCLE: u32 = 0x30_202C;
 const REG_HOFFSET: u32 = 0x30_2030;
@@ -62,12 +67,21 @@ const REG_PWM_DUTY: u32 = 0x30_20D4;
 const REG_TOUCH_MODE: u32 = 0x30_2104;
 const REG_CTOUCH_EXTENDED: u32 = 0x30_2108;
 const REG_TOUCH_SCREEN_XY: u32 = 0x30_2124;
+const REG_CMD_READ: u32 = 0x30_20F8;
+const REG_CMD_WRITE: u32 = 0x30_20FC;
 
 // ── Host commands (3-byte frames) ───────────────────────────────────────────
 const HCMD_ACTIVE: u8 = 0x00;
 const HCMD_CLKEXT: u8 = 0x44;
 const HCMD_CLKINT: u8 = 0x48;
 const HCMD_RST_PULSE: u8 = 0x68;
+
+// ── Co-processor command opcodes ────────────────────────────────────────────
+const CMD_DLSTART: u32 = 0xFFFF_FF00;
+const CMD_SWAP: u32 = 0xFFFF_FF01;
+const CMD_TEXT: u32 = 0xFFFF_FF0C;
+/// `REG_CMD_READ` reports this sentinel when the co-processor has faulted.
+const CMD_FAULT: u16 = 0x0FFF;
 
 // ── Panel timings: 4D Systems gen4-FT813-70 (standard 800×480 WVGA set) ─────
 const H_CYCLE: u16 = 928;
@@ -81,14 +95,46 @@ const V_SYNC1: u16 = 3;
 const PCLK_DIV: u8 = 2; // 60 MHz / 2 = 30 MHz pixel clock
 const PCLK_POL: u8 = 1; // fetch on falling edge
 const SWIZZLE: u8 = 0;
-const CSPREAD: u8 = 0;
+const CSPREAD: u8 = 0; // clock spreading off (1 seemed to worsen touch on this panel)
+
+/// `RECTS` primitive selector for [`dl_begin`].
+pub const RECTS: u32 = 9;
+/// `POINTS` primitive selector for [`dl_begin`] (filled circles, radius set by
+/// [`dl_point_size`]).
+pub const POINTS: u32 = 2;
+/// `CMD_TEXT` option: centre the string on the given anchor point
+/// (`OPT_CENTERX | OPT_CENTERY`).
+pub const OPT_CENTER: u16 = 0x0600;
 
 // ── Display-list encoding (subset) ──────────────────────────────────────────
-const fn dl_clear_color_rgb(r: u8, g: u8, b: u8) -> u32 {
+/// `CLEAR_COLOR_RGB` — background colour used by the next [`dl_clear`].
+pub const fn dl_clear_color_rgb(r: u8, g: u8, b: u8) -> u32 {
     0x0200_0000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32
 }
-const fn dl_clear() -> u32 {
-    0x2600_0007 // clear colour + stencil + tag
+/// `CLEAR` — clear colour + stencil + tag buffers.
+pub const fn dl_clear() -> u32 {
+    0x2600_0007
+}
+/// `COLOR_RGB` — drawing colour for subsequent primitives / text.
+pub const fn dl_color_rgb(r: u8, g: u8, b: u8) -> u32 {
+    0x0400_0000 | ((r as u32) << 16) | ((g as u32) << 8) | b as u32
+}
+/// `BEGIN(prim)` — start a primitive (e.g. [`RECTS`]).
+pub const fn dl_begin(prim: u32) -> u32 {
+    0x1F00_0000 | (prim & 0x0F)
+}
+/// `VERTEX_FORMAT(frac)` — number of sub-pixel fraction bits in
+/// [`dl_vertex2f`] (0 = whole pixels, default after reset is 4).
+pub const fn dl_vertex_format(frac: u8) -> u32 {
+    0x2700_0000 | (frac as u32 & 0x07)
+}
+/// `VERTEX2F(x, y)` — a vertex in the units set by [`dl_vertex_format`].
+pub const fn dl_vertex2f(x: i16, y: i16) -> u32 {
+    (1 << 30) | ((x as u32 & 0x7FFF) << 15) | (y as u32 & 0x7FFF)
+}
+/// `POINT_SIZE(radius)` — radius of [`POINTS`] in 1/16 pixel.
+pub const fn dl_point_size(radius: u16) -> u32 {
+    0x0D00_0000 | (radius as u32 & 0x1FFF)
 }
 const fn dl_bitmap_handle(h: u32) -> u32 {
     0x0500_0000 | (h & 0x1F)
@@ -116,10 +162,12 @@ const fn dl_begin_bitmaps() -> u32 {
 const fn dl_vertex2ii(x: u32, y: u32) -> u32 {
     0x8000_0000 | ((x & 0x1FF) << 21) | ((y & 0x1FF) << 12)
 }
-const fn dl_end() -> u32 {
+/// `END` — finish the current primitive.
+pub const fn dl_end() -> u32 {
     0x2100_0000
 }
-const fn dl_display() -> u32 {
+/// `DISPLAY` — end of the display list.
+pub const fn dl_display() -> u32 {
     0x0000_0000
 }
 const DLSWAP_FRAME: u32 = 2;
@@ -144,6 +192,11 @@ pub enum Error {
     ChipIdTimeout,
     /// The graphics engine never left reset.
     ResetTimeout,
+    /// The co-processor did not drain the command FIFO in time.
+    CoprocTimeout,
+    /// The co-processor faulted on a malformed command (`REG_CMD_READ`
+    /// stuck at `0xFFF`).
+    CoprocFault,
 }
 
 impl From<spi::Error> for Error {
@@ -162,6 +215,9 @@ pub struct Ft81x {
     cs: Output<'static>,
     pd: Output<'static>,
     config: spi::Config,
+    /// Local mirror of `REG_CMD_WRITE`: byte offset of the next free slot in
+    /// the `RAM_CMD` ring (always a multiple of 4, masked to the 4 KiB ring).
+    cmd_offset: u16,
 }
 
 impl Ft81x {
@@ -173,7 +229,13 @@ impl Ft81x {
         pd: Output<'static>,
         config: spi::Config,
     ) -> Self {
-        Self { spi, cs, pd, config }
+        Self {
+            spi,
+            cs,
+            pd,
+            config,
+            cmd_offset: 0,
+        }
     }
 
     /// Change the SPI clock (call after [`Ft81x::init`]; FT81x max is 30 MHz).
@@ -242,9 +304,10 @@ impl Ft81x {
 
     /// Power up and configure the FT813 for the 800×480 gen4 panel.
     ///
-    /// Leaves the panel scanning a blank (black) display list with the
-    /// backlight off; call [`Ft81x::show_framebuffer`] +
-    /// [`Ft81x::set_backlight`] once the framebuffer has content.
+    /// Loads the panel timings and a blank display list but leaves the pixel
+    /// clock and backlight **off**. After optionally raising the SPI speed
+    /// ([`Ft81x::set_spi_frequency`]) and loading the first frame, call
+    /// [`Ft81x::enable_display`] + [`Ft81x::set_backlight`] to light it up.
     pub async fn init(&mut self) -> Result<(), Error> {
         // gen4-FT813 modules run from the FT813's internal oscillator. Try
         // CLKINT first and fall back to CLKEXT once, in case a module variant
@@ -297,6 +360,17 @@ impl Ft81x {
             Timer::after_millis(5).await;
         }
 
+        // Reset the co-processor and clear its FIFO pointers. A previous run
+        // that was halted mid-command (e.g. the debugger stopped the MCU during
+        // an SPI burst) can leave the co-processor wedged so the first CMD_SWAP
+        // never drains; the PDN power-cycle alone does not always clear it.
+        // REG_CPURESET bit 0 = co-processor only (touch/audio untouched).
+        self.wr8(REG_CPURESET, 1)?;
+        self.wr32(REG_CMD_READ, 0)?;
+        self.wr32(REG_CMD_WRITE, 0)?;
+        self.wr8(REG_CPURESET, 0)?;
+        Timer::after_millis(2).await;
+
         // Panel timings (PCLK stays 0 = display off until the end).
         self.wr16(REG_HSIZE, DISPLAY_WIDTH as u16)?;
         self.wr16(REG_HCYCLE, H_CYCLE)?;
@@ -323,23 +397,159 @@ impl Ft81x {
         self.wr32(RAM_DL + 8, dl_display())?;
         self.wr32(REG_DLSWAP, DLSWAP_FRAME)?;
 
-        // DISP pin high (GPIOX bit 15), backlight PWM ready but dark.
-        self.wr16(REG_GPIOX_DIR, 0x8000)?;
-        let gpiox = self.rd32(REG_GPIOX)? as u16;
-        self.wr16(REG_GPIOX, gpiox | 0x8000)?;
+        // Backlight PWM configured but dark for now.
         self.wr16(REG_PWM_HZ, 250)?;
         self.wr8(REG_PWM_DUTY, 0)?;
 
-        // Start the pixel clock — panel is now scanning.
-        self.wr8(REG_PCLK, PCLK_DIV)?;
+        // NB: DISP and the pixel clock are deliberately *not* enabled here.
+        // Enabling REG_PCLK and then reconfiguring the SPI master (e.g.
+        // set_spi_frequency) leaves REG_PCLK cleared again on the H573I-DK,
+        // so the panel would go dark. Call [`Ft81x::enable_display`] as the
+        // last bring-up step, after the final SPI speed and the first frame.
 
-        defmt::info!("ft81x: init ok (REG_ID=0x7c, 800x480 @ 30 MHz PCLK)");
+        // Sync our local FIFO write pointer with the co-processor's.
+        self.cmd_offset = (self.rd32(REG_CMD_WRITE)? & 0x0FFF) as u16;
+
+        defmt::info!("ft81x: init ok (REG_ID=0x7c, 800x480, display still off)");
         Ok(())
+    }
+
+    /// Enable the panel output: drive DISP high (`REG_GPIOX` bit 15) and start
+    /// the pixel clock (`REG_PCLK`).
+    ///
+    /// Call this **last**, after [`Ft81x::set_spi_frequency`] and after the
+    /// first frame has been loaded. Writing `REG_PCLK` before the final SPI
+    /// reconfiguration leaves it cleared again (observed on the H573I-DK:
+    /// `set_config` toggles SPE and the FT813 loses the pixel clock).
+    pub fn enable_display(&mut self) -> Result<(), Error> {
+        self.enable_disp()?;
+        self.wr8(REG_PCLK, PCLK_DIV)?;
+        Ok(())
+    }
+
+    /// Drive DISP high (`REG_GPIOX` bit 15) without starting the pixel clock.
+    ///
+    /// Both `REG_GPIOX_DIR` and `REG_GPIOX` are read-modify-written so only bit
+    /// 15 (DISP) changes. A blind `REG_GPIOX_DIR = 0x8000` forces GPIO0..3 to
+    /// inputs, which on the gen4 module drops the capacitive-touch controller's
+    /// reset/INT line and kills touch permanently — so preserve the low bits.
+    pub fn enable_disp(&mut self) -> Result<(), Error> {
+        let dir = self.rd32(REG_GPIOX_DIR)? as u16;
+        self.wr16(REG_GPIOX_DIR, dir | 0x8000)?;
+        let gpiox = self.rd32(REG_GPIOX)? as u16;
+        self.wr16(REG_GPIOX, gpiox | 0x8000)?;
+        Ok(())
+    }
+
+    // ── Co-processor (RAM_CMD FIFO) ─────────────────────────────────────────
+    //
+    // The FT813 EVE co-processor renders high-level objects (text, buttons,
+    // gradients, …) and full display lists from a 4 KiB command ring. Push
+    // words with [`Ft81x::co_cmd`] (raw DL words) / [`Ft81x::co_text`], bracket
+    // a frame with [`Ft81x::co_start`] (`CMD_DLSTART`) and [`Ft81x::co_swap`]
+    // (`CMD_SWAP`), then submit and wait with [`Ft81x::co_run`].
+
+    /// Append `CMD_DLSTART` — begin a fresh display list.
+    pub fn co_start(&mut self) -> Result<(), Error> {
+        self.co_cmd(CMD_DLSTART)
+    }
+
+    /// Append `CMD_SWAP` — make the just-built display list the active frame.
+    pub fn co_swap(&mut self) -> Result<(), Error> {
+        self.co_cmd(CMD_SWAP)
+    }
+
+    /// Append one 32-bit word (a co-processor opcode or a raw display-list
+    /// command such as [`dl_color_rgb`]) to the command FIFO.
+    pub fn co_cmd(&mut self, word: u32) -> Result<(), Error> {
+        self.wr32(RAM_CMD + self.cmd_offset as u32, word)?;
+        self.cmd_offset = (self.cmd_offset + 4) % RAM_CMD_SIZE;
+        Ok(())
+    }
+
+    /// Append `CMD_TEXT`: draw `s` at (`x`, `y`) in the given built-in `font`
+    /// (16..34), using `options` (e.g. [`OPT_CENTER`]).
+    pub fn co_text(&mut self, x: i16, y: i16, font: i16, options: u16, s: &str) -> Result<(), Error> {
+        self.co_cmd(CMD_TEXT)?;
+        self.co_cmd((x as u16 as u32) | ((y as u16 as u32) << 16))?;
+        self.co_cmd((font as u16 as u32) | ((options as u32) << 16))?;
+        // The string is NUL-terminated and zero-padded so the FIFO pointer
+        // stays 4-byte aligned.
+        let mut word = [0u8; 4];
+        let mut n = 0;
+        for &byte in s.as_bytes() {
+            word[n] = byte;
+            n += 1;
+            if n == 4 {
+                self.co_cmd(u32::from_le_bytes(word))?;
+                word = [0; 4];
+                n = 0;
+            }
+        }
+        // Always emit a final word: its trailing zero bytes carry the NUL
+        // terminator plus padding (also covers an exact multiple-of-4 string).
+        self.co_cmd(u32::from_le_bytes(word))
+    }
+
+    /// Submit the queued commands (`REG_CMD_WRITE`) and wait for the
+    /// co-processor to drain the FIFO.
+    pub async fn co_run(&mut self) -> Result<(), Error> {
+        self.wr32(REG_CMD_WRITE, self.cmd_offset as u32)?;
+        let deadline = Instant::now() + Duration::from_millis(250);
+        loop {
+            let rd = (self.rd32(REG_CMD_READ)? & 0x0FFF) as u16;
+            if rd == CMD_FAULT {
+                return Err(Error::CoprocFault);
+            }
+            if rd == self.cmd_offset {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::CoprocTimeout);
+            }
+            Timer::after_millis(2).await;
+        }
     }
 
     /// Backlight brightness, `0..=128`.
     pub fn set_backlight(&mut self, duty: u8) -> Result<(), Error> {
         self.wr8(REG_PWM_DUTY, duty.min(128))
+    }
+
+    /// Read back `REG_PCLK` and `REG_GPIOX` (for localising where the pixel
+    /// clock / DISP enable gets lost during bring-up).
+    pub fn read_pclk_gpiox(&mut self) -> Result<(u8, u16), Error> {
+        Ok((self.rd8(REG_PCLK)?, self.rd32(REG_GPIOX)? as u16))
+    }
+
+    /// Log key registers for display bring-up debugging.
+    ///
+    /// The decisive one is `REG_FRAMES`: it increments once per scanned-out
+    /// frame, so if it climbs (~60 in one second) the FT813 *is* driving the
+    /// panel and any "black screen" is downstream — backlight power (the gen4
+    /// needs 5 V for its boost) or the LCD flex — not the SPI link or the
+    /// display-list. If it stays put, the pixel clock never locked (timings /
+    /// `REG_PCLK`). `REG_CLOCK` always ticks while the core runs (a sanity
+    /// check independent of `PCLK`).
+    pub async fn log_display_status(&mut self) -> Result<(), Error> {
+        let (frames0, clock0) = (self.rd32(REG_FRAMES)?, self.rd32(REG_CLOCK)?);
+        Timer::after_millis(200).await;
+        let (frames1, clock1) = (self.rd32(REG_FRAMES)?, self.rd32(REG_CLOCK)?);
+        let pclk = self.rd8(REG_PCLK)?;
+        let duty = self.rd8(REG_PWM_DUTY)?;
+        let gpiox = self.rd32(REG_GPIOX)? as u16;
+        defmt::info!(
+            "ft81x diag over 200ms: REG_FRAMES {}->{} (+{}), REG_CLOCK +{}, REG_PCLK={}, REG_PWM_DUTY={}, REG_GPIOX={=u16:#06x} DISP={}",
+            frames0,
+            frames1,
+            frames1.wrapping_sub(frames0),
+            clock1.wrapping_sub(clock0),
+            pclk,
+            duty,
+            gpiox,
+            (gpiox & 0x8000) != 0,
+        );
+        Ok(())
     }
 
     /// Fill the whole `RAM_G` framebuffer with one RGB565 colour.
@@ -399,17 +609,68 @@ impl Ft81x {
         Ok(())
     }
 
-    /// Read one touch sample from the capacitive touch engine.
+    /// Read the raw `REG_TOUCH_SCREEN_XY` word (for touch diagnostics).
+    /// `0x8000_8000` means "not touched".
+    pub fn touch_raw(&mut self) -> Result<u32, Error> {
+        self.rd32(REG_TOUCH_SCREEN_XY)
+    }
+
+    /// Set `REG_PCLK` directly (0 = pixel clock off / display blank, the
+    /// configured divisor = normal). For bring-up A/B tests.
+    pub fn set_pclk(&mut self, div: u8) -> Result<(), Error> {
+        self.wr8(REG_PCLK, div)
+    }
+
+    /// Read `(REG_GPIOX_DIR, REG_GPIOX)` for GPIO bring-up diagnostics.
+    pub fn read_gpiox(&mut self) -> Result<(u16, u16), Error> {
+        Ok((self.rd32(REG_GPIOX_DIR)? as u16, self.rd32(REG_GPIOX)? as u16))
+    }
+
+    /// Drive the DISP output (`REG_GPIOX` bit 15) high or low, preserving the
+    /// other GPIOX bits. `true` enables the panel; on the gen4 module this also
+    /// appears to disturb the capacitive touch, so it is worth testing whether
+    /// the module drives its own DISP and this can stay off.
+    pub fn set_disp(&mut self, on: bool) -> Result<(), Error> {
+        let g = self.rd32(REG_GPIOX)? as u16;
+        let g = if on { g | 0x8000 } else { g & !0x8000 };
+        self.wr16(REG_GPIOX, g)
+    }
+
+    /// Read back the touch engine configuration: `(REG_TOUCH_MODE,
+    /// REG_CTOUCH_EXTENDED)`. Expected after [`Ft81x::init`]: `(3, 1)`
+    /// (continuous sampling, single-touch compatibility mode).
+    pub fn touch_config(&mut self) -> Result<(u8, u8), Error> {
+        Ok((self.rd8(REG_TOUCH_MODE)?, self.rd8(REG_CTOUCH_EXTENDED)?))
+    }
+
+    /// Re-assert the touch engine configuration (continuous, single-touch
+    /// compatibility mode). Useful if a later SPI reconfiguration cleared it,
+    /// the same way it clears `REG_PCLK` on the H573I-DK.
+    pub fn reinit_touch(&mut self) -> Result<(), Error> {
+        self.wr8(REG_CTOUCH_EXTENDED, 1)?;
+        self.wr8(REG_TOUCH_MODE, 3)
+    }
+
+    /// Read one raw touch sample from the capacitive touch engine.
+    ///
+    /// This is a single, undebounced sample: capacitive noise (especially now
+    /// that the panel is scanning) makes individual samples flicker between
+    /// touched and released, so debounce in the caller (see the self-test
+    /// loop / the LVGL indev).
     pub fn touch(&mut self) -> Result<TouchPoint, Error> {
         let xy = self.rd32(REG_TOUCH_SCREEN_XY)?;
-        if xy == 0x8000_8000 {
+        let rx = (xy >> 16) as i16;
+        let ry = (xy & 0xFFFF) as i16;
+        // Not touched: both fields are the 0x8000 (i16::MIN) sentinel. A held
+        // touch can briefly read the sentinel in only *one* field, so require
+        // both — otherwise `pressed` flickers mid-touch. Debounce the release
+        // in the caller for the remaining brief both-field dropouts.
+        if rx == i16::MIN && ry == i16::MIN {
             return Ok(TouchPoint::default());
         }
-        let x = (xy >> 16) as i16 as i32;
-        let y = (xy & 0xFFFF) as i16 as i32;
         Ok(TouchPoint {
-            x: x.clamp(0, DISPLAY_WIDTH as i32 - 1),
-            y: y.clamp(0, DISPLAY_HEIGHT as i32 - 1),
+            x: (rx as i32).clamp(0, DISPLAY_WIDTH as i32 - 1),
+            y: (ry as i32).clamp(0, DISPLAY_HEIGHT as i32 - 1),
             pressed: true,
         })
     }
