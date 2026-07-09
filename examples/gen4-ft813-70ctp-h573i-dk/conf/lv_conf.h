@@ -301,7 +301,7 @@
  * THEMES
  *==================*/
 
-#define LV_USE_THEME_DEFAULT 0
+#define LV_USE_THEME_DEFAULT 1
 #if LV_USE_THEME_DEFAULT
     #define LV_THEME_DEFAULT_DARK 0
     #define LV_THEME_DEFAULT_GROW 0

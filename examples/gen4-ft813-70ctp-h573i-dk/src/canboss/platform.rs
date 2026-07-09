@@ -36,6 +36,9 @@ pub async fn run_canboss_app(eve: &'static mut Ft81x, bufs: &'static mut LvglBuf
 
     DISPLAY_READY.wait().await;
 
+    // Widgets (Switch/Slider/Spinbox/Bar) im protronic-Akzent statt LVGL-Default.
+    crate::canboss::views::apply_accent_theme();
+
     let mut nav = Navigator::new();
     nav.push_root(MenuView::default());
 

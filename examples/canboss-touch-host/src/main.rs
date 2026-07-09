@@ -72,6 +72,9 @@ async fn main(spawner: Spawner) {
     // Das `#[task]`-Makro dieser embassy-Version liefert Result<SpawnToken, _>.
     spawner.spawn(sdo::worker_task().unwrap());
 
+    // Widgets im protronic-Akzent statt LVGL-Default (vor dem Bau der Views).
+    canboss::views::apply_accent_theme();
+
     let mut nav = Navigator::new();
     nav.push_root(MenuView::default());
 
