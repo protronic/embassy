@@ -63,9 +63,66 @@ afterwards (250 MHz SPI2 kernel clock / 16; the next step, /8 = 31.25 MHz,
 would exceed the FT81x's 30 MHz limit). A full-screen repaint therefore takes
 ~400 ms — fine for a widget UI where LVGL only flushes dirty rectangles.
 
-Panel timings are the standard 800×480 WVGA set used for gen4-FT812/FT813-70
-modules (HCYCLE 928, VCYCLE 525, PCLK 60/2 = 30 MHz, no external crystal →
-`CLKINT`, with automatic `CLKEXT` fallback at init).
+No external crystal → `CLKINT` (with automatic `CLKEXT` fallback at init).
+
+### Panel timings (7.0″ TN)
+
+From the module datasheet **`gen4_FT81x_Series_Datasheet_R_1_5.pdf`**, section
+*"7.0″ LCD Timing Characteristic (TN)"* — the gen4-FT813-70CT-CLB is the 7.0″
+TN panel. These are **not** the generic FTDI WQVGA numbers, and they differ
+from the 5.0″ and the IPS variants in the same datasheet.
+
+| Item | Symbol | Min | Typ | Max | Unit |
+|------|--------|----:|----:|----:|------|
+| DCLK Frequency       | Fclk   | 20  | 33.3 | 50   | MHz  |
+| Hsync Period Time    | Th     | 908 | 928  | 1088 | DCLK |
+| Hsync Display Period | Thdisp | –   | 800  | –    | DCLK |
+| Hsync Back Porch     | Thbp   | 1   | 40   | 87   | DCLK |
+| Hsync Front Porch    | Thfp   | 20  | 40   | 200  | DCLK |
+| Hsync Pulse Width    | Thw    | 1   | 4    | 43   | DCLK |
+| Vsync Period Time    | Tv     | 517 | 525  | 712  | H    |
+| Vsync Display Period | Tvdisp | –   | 480  | –    | H    |
+| Vsync Back Porch     | Tvbp   | 29  | 31   | 31   | H    |
+| Vsync Front Porch    | Tvfp   | 5   | 13   | 200  | H    |
+| Vsync Pulse Width    | Tvw    | 1   | 1    | 3    | H    |
+
+Mapped to the FT81x registers in `src/ft81x.rs` (TYP values):
+
+| Register | Value | Derivation |
+|----------|------:|------------|
+| `REG_HCYCLE`  | 928 | Th |
+| `REG_HSIZE`   | 800 | Thdisp |
+| `REG_HOFFSET` | 44  | Thw + Thbp (4 + 40) |
+| `REG_HSYNC0`  | 0   | — |
+| `REG_HSYNC1`  | 4   | Thw |
+| `REG_VCYCLE`  | 525 | Tv |
+| `REG_VSIZE`   | 480 | Tvdisp |
+| `REG_VOFFSET` | 32  | Tvw + Tvbp (1 + 31) |
+| `REG_VSYNC0`  | 0   | — |
+| `REG_VSYNC1`  | 1   | Tvw |
+| `REG_PCLK`    | 2   | 60 MHz ÷ 2 = 30 MHz DCLK (within Fclk 20–50) |
+
+> **Note:** with these datasheet-correct timings the colour bars can still look
+> streaky toward the bottom on a loose flywire hookup. That is a signal/ground
+> integrity issue (weak module GND), not a timing bug — the same weak ground
+> that makes the capacitive touch drop out while the panel is scanning. Solid,
+> short GND + power to the module is the fix. See the touch note below.
+
+### Touch & known limitations
+
+Touch is the FT813's built-in capacitive engine, read by polling
+`REG_TOUCH_SCREEN_XY` over SPI. This panel reports the axes **transposed** vs
+the FT81x default (X in the low 16 bits, Y in the high 16), which `Ft81x::touch`
+compensates for. Coordinates are raw/uncalibrated — run `CMD_CALIBRATE` for an
+exact finger-to-pixel mapping.
+
+While the panel is scanning (DISP high) the capacitive touch is sensitive to
+display noise / ground bounce over the flywire hookup: on a weak module ground
+it drops out (frozen `0x8000_8000`) or reports phantom touches, yet it works
+perfectly with the display off. This is a hardware wiring issue, not a driver
+bug — the fixes are **solid, short GND (several wires)** and a **bulk cap
+(~47–100 µF) across the module's VCC/GND**. Lowering `REG_PCLK` or enabling
+`REG_CSPREAD` did not help.
 
 ## Build
 

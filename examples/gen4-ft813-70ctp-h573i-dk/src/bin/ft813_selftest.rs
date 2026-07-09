@@ -107,6 +107,9 @@ async fn main(_spawner: Spawner) -> ! {
     unwrap!(draw_frame(&mut eve, None).await);
     unwrap!(eve.enable_display());
     unwrap!(eve.set_backlight(96));
+    unwrap!(eve.log_timing()); // verify the timings held through bring-up
+    let (mode, ext) = unwrap!(eve.touch_config());
+    info!("touch cfg: REG_TOUCH_MODE={} REG_CTOUCH_EXTENDED={} (expect 3, 1)", mode, ext);
     info!("co-processor frame up — touch the panel");
 
     // Debounce press/release; while pressed, draw the marker at the latest

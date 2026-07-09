@@ -43,6 +43,7 @@ const RAM_CMD_SIZE: u16 = 4096;
 const REG_ID: u32 = 0x30_2000;
 const REG_FRAMES: u32 = 0x30_2004;
 const REG_CLOCK: u32 = 0x30_2008;
+const REG_FREQUENCY: u32 = 0x30_200C;
 const REG_CPURESET: u32 = 0x30_2020;
 const REG_HCYCLE: u32 = 0x30_202C;
 const REG_HOFFSET: u32 = 0x30_2030;
@@ -83,16 +84,19 @@ const CMD_TEXT: u32 = 0xFFFF_FF0C;
 /// `REG_CMD_READ` reports this sentinel when the co-processor has faulted.
 const CMD_FAULT: u16 = 0x0FFF;
 
-// ── Panel timings: 4D Systems gen4-FT813-70 (standard 800×480 WVGA set) ─────
+// ── Panel timings: 4D Systems gen4-FT813-70 (7.0" 800×480), from the module
+// datasheet's "7.0" LCD Timing Characteristic (TN)" table (TYP values).
+// H: Th=928, Thdisp=800, Thw=4, Thbp=40 -> HOFFSET=Thw+Thbp=44
+// V: Tv=525, Tvdisp=480, Tvw=1, Tvbp=31 -> VOFFSET=Tvw+Tvbp=32
 const H_CYCLE: u16 = 928;
-const H_OFFSET: u16 = 88;
+const H_OFFSET: u16 = 44;
 const H_SYNC0: u16 = 0;
-const H_SYNC1: u16 = 48;
+const H_SYNC1: u16 = 4;
 const V_CYCLE: u16 = 525;
 const V_OFFSET: u16 = 32;
 const V_SYNC0: u16 = 0;
-const V_SYNC1: u16 = 3;
-const PCLK_DIV: u8 = 2; // 60 MHz / 2 = 30 MHz pixel clock
+const V_SYNC1: u16 = 1;
+const PCLK_DIV: u8 = 2; // 60 MHz / 2 = 30 MHz pixel clock (panel DCLK typ 33.3, range 20..50)
 const PCLK_POL: u8 = 1; // fetch on falling edge
 const SWIZZLE: u8 = 0;
 const CSPREAD: u8 = 0; // clock spreading off (1 seemed to worsen touch on this panel)
@@ -351,7 +355,16 @@ impl Ft81x {
     }
 
     async fn configure(&mut self) -> Result<(), Error> {
-        // Wait for the graphics engine to leave reset.
+        // Reset the co-processor and clear its FIFO pointers first. A previous
+        // run halted mid-command (e.g. the debugger stopped the MCU during an
+        // SPI burst) can leave the co-processor wedged so the first CMD_SWAP
+        // never drains; the PDN power-cycle alone does not always clear it.
+        self.wr8(REG_CPURESET, 1)?;
+        self.wr32(REG_CMD_READ, 0)?;
+        self.wr32(REG_CMD_WRITE, 0)?;
+        self.wr8(REG_CPURESET, 0)?;
+
+        // Wait for the graphics engine + co-processor to leave reset.
         let deadline = Instant::now() + Duration::from_millis(400);
         while self.rd8(REG_CPURESET)? != 0 {
             if Instant::now() >= deadline {
@@ -360,55 +373,40 @@ impl Ft81x {
             Timer::after_millis(5).await;
         }
 
-        // Reset the co-processor and clear its FIFO pointers. A previous run
-        // that was halted mid-command (e.g. the debugger stopped the MCU during
-        // an SPI burst) can leave the co-processor wedged so the first CMD_SWAP
-        // never drains; the PDN power-cycle alone does not always clear it.
-        // REG_CPURESET bit 0 = co-processor only (touch/audio untouched).
-        self.wr8(REG_CPURESET, 1)?;
-        self.wr32(REG_CMD_READ, 0)?;
-        self.wr32(REG_CMD_WRITE, 0)?;
-        self.wr8(REG_CPURESET, 0)?;
-        Timer::after_millis(2).await;
-
-        // Panel timings (PCLK stays 0 = display off until the end).
-        self.wr16(REG_HSIZE, DISPLAY_WIDTH as u16)?;
-        self.wr16(REG_HCYCLE, H_CYCLE)?;
-        self.wr16(REG_HOFFSET, H_OFFSET)?;
-        self.wr16(REG_HSYNC0, H_SYNC0)?;
-        self.wr16(REG_HSYNC1, H_SYNC1)?;
-        self.wr16(REG_VSIZE, DISPLAY_HEIGHT as u16)?;
-        self.wr16(REG_VCYCLE, V_CYCLE)?;
-        self.wr16(REG_VOFFSET, V_OFFSET)?;
-        self.wr16(REG_VSYNC0, V_SYNC0)?;
-        self.wr16(REG_VSYNC1, V_SYNC1)?;
-        self.wr8(REG_SWIZZLE, SWIZZLE)?;
-        self.wr8(REG_PCLK_POL, PCLK_POL)?;
-        self.wr8(REG_CSPREAD, CSPREAD)?;
-        self.wr8(REG_DITHER, 1)?;
-
         // Capacitive touch: compatibility mode (single touch), continuous.
         self.wr8(REG_CTOUCH_EXTENDED, 1)?;
         self.wr8(REG_TOUCH_MODE, 3)?;
 
-        // Blank display list so the first visible frame is black.
-        self.wr32(RAM_DL, dl_clear_color_rgb(0, 0, 0))?;
-        self.wr32(RAM_DL + 4, dl_clear())?;
-        self.wr32(RAM_DL + 8, dl_display())?;
-        self.wr32(REG_DLSWAP, DLSWAP_FRAME)?;
-
         // Backlight PWM configured but dark for now.
         self.wr16(REG_PWM_HZ, 250)?;
         self.wr8(REG_PWM_DUTY, 0)?;
+
+        // Sync our local FIFO write pointer with the co-processor's.
+        self.cmd_offset = (self.rd32(REG_CMD_WRITE)? & 0x0FFF) as u16;
+
+        // The FT81x ignores writes to the panel-timing registers (V-timing in
+        // particular) until the co-processor has executed its first display
+        // list — before that they read back 0, and the co-processor then
+        // installs its own 480×272 defaults, which drive only the top of the
+        // panel and leave the lower part streaky. So run one blank coproc frame
+        // first, THEN apply the real timings; they stick and persist afterwards.
+        self.co_start()?;
+        self.co_cmd(dl_clear_color_rgb(0, 0, 0))?;
+        self.co_cmd(dl_clear())?;
+        self.co_cmd(dl_display())?;
+        self.co_swap()?;
+        self.co_run().await?;
+        // The timings are applied in `enable_display`, not here: a later
+        // `set_spi_frequency` resets the co-processor display state, so the
+        // next frame re-installs the 480×272 defaults. Applying them as part of
+        // the final bring-up (after the last SPI-speed change + first frame)
+        // makes them stick.
 
         // NB: DISP and the pixel clock are deliberately *not* enabled here.
         // Enabling REG_PCLK and then reconfiguring the SPI master (e.g.
         // set_spi_frequency) leaves REG_PCLK cleared again on the H573I-DK,
         // so the panel would go dark. Call [`Ft81x::enable_display`] as the
         // last bring-up step, after the final SPI speed and the first frame.
-
-        // Sync our local FIFO write pointer with the co-processor's.
-        self.cmd_offset = (self.rd32(REG_CMD_WRITE)? & 0x0FFF) as u16;
 
         defmt::info!("ft81x: init ok (REG_ID=0x7c, 800x480, display still off)");
         Ok(())
@@ -422,6 +420,11 @@ impl Ft81x {
     /// reconfiguration leaves it cleared again (observed on the H573I-DK:
     /// `set_config` toggles SPE and the FT813 loses the pixel clock).
     pub fn enable_display(&mut self) -> Result<(), Error> {
+        // Apply the panel timings here — as the final bring-up step, after the
+        // last set_spi_frequency and the first co-processor frame. Written any
+        // earlier they are ignored (V-timing reads back 0 / reverts to the
+        // 480×272 defaults, streaky lower screen). See `configure`.
+        self.set_panel_timings()?;
         self.enable_disp()?;
         self.wr8(REG_PCLK, PCLK_DIV)?;
         Ok(())
@@ -520,6 +523,59 @@ impl Ft81x {
     /// clock / DISP enable gets lost during bring-up).
     pub fn read_pclk_gpiox(&mut self) -> Result<(u8, u16), Error> {
         Ok((self.rd8(REG_PCLK)?, self.rd32(REG_GPIOX)? as u16))
+    }
+
+    /// Write the panel timing + pixel-format registers. Must be applied *after*
+    /// the co-processor has run its first display list — before that the FT81x
+    /// ignores these writes (they read back 0 and the co-processor installs its
+    /// 480×272 defaults). See [`Ft81x::configure`].
+    fn set_panel_timings(&mut self) -> Result<(), Error> {
+        self.wr16(REG_HSIZE, DISPLAY_WIDTH as u16)?;
+        self.wr16(REG_HCYCLE, H_CYCLE)?;
+        self.wr16(REG_HOFFSET, H_OFFSET)?;
+        self.wr16(REG_HSYNC0, H_SYNC0)?;
+        self.wr16(REG_HSYNC1, H_SYNC1)?;
+        self.wr16(REG_VSIZE, DISPLAY_HEIGHT as u16)?;
+        self.wr16(REG_VCYCLE, V_CYCLE)?;
+        self.wr16(REG_VOFFSET, V_OFFSET)?;
+        self.wr16(REG_VSYNC0, V_SYNC0)?;
+        self.wr16(REG_VSYNC1, V_SYNC1)?;
+        self.wr8(REG_SWIZZLE, SWIZZLE)?;
+        self.wr8(REG_PCLK_POL, PCLK_POL)?;
+        self.wr8(REG_CSPREAD, CSPREAD)?;
+        self.wr8(REG_DITHER, 1)?;
+        Ok(())
+    }
+
+    /// Read back the panel-timing registers (to confirm the writes stuck and
+    /// see the FT81x core clock) — for debugging display artefacts.
+    pub fn log_timing(&mut self) -> Result<(), Error> {
+        defmt::info!(
+            "timing H: HCYCLE={} HSIZE={} HOFFSET={} HSYNC0={} HSYNC1={}",
+            self.rd32(REG_HCYCLE)? & 0xFFFF,
+            self.rd32(REG_HSIZE)? & 0xFFFF,
+            self.rd32(REG_HOFFSET)? & 0xFFFF,
+            self.rd32(REG_HSYNC0)? & 0xFFFF,
+            self.rd32(REG_HSYNC1)? & 0xFFFF,
+        );
+        defmt::info!(
+            "timing V: VCYCLE={} VSIZE={} VOFFSET={} VSYNC0={} VSYNC1={}",
+            self.rd32(REG_VCYCLE)? & 0xFFFF,
+            self.rd32(REG_VSIZE)? & 0xFFFF,
+            self.rd32(REG_VOFFSET)? & 0xFFFF,
+            self.rd32(REG_VSYNC0)? & 0xFFFF,
+            self.rd32(REG_VSYNC1)? & 0xFFFF,
+        );
+        defmt::info!(
+            "timing X: PCLK={} PCLK_POL={} SWIZZLE={} CSPREAD={} DITHER={} FREQUENCY={}",
+            self.rd8(REG_PCLK)?,
+            self.rd8(REG_PCLK_POL)?,
+            self.rd8(REG_SWIZZLE)?,
+            self.rd8(REG_CSPREAD)?,
+            self.rd8(REG_DITHER)?,
+            self.rd32(REG_FREQUENCY)?,
+        );
+        Ok(())
     }
 
     /// Log key registers for display bring-up debugging.
@@ -659,8 +715,11 @@ impl Ft81x {
     /// loop / the LVGL indev).
     pub fn touch(&mut self) -> Result<TouchPoint, Error> {
         let xy = self.rd32(REG_TOUCH_SCREEN_XY)?;
-        let rx = (xy >> 16) as i16;
-        let ry = (xy & 0xFFFF) as i16;
+        // This gen4 panel reports the axes transposed vs the FT81x default
+        // (which is X in the high 16 bits, Y in the low): here X is the low
+        // half and Y the high half. Read them accordingly.
+        let rx = (xy & 0xFFFF) as i16; // X
+        let ry = (xy >> 16) as i16; // Y
         // Not touched: both fields are the 0x8000 (i16::MIN) sentinel. A held
         // touch can briefly read the sentinel in only *one* field, so require
         // both — otherwise `pressed` flickers mid-touch. Debounce the release
