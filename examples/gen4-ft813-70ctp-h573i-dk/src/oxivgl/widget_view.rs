@@ -11,6 +11,7 @@ use oxivgl::style::{GradDir, Selector};
 use oxivgl::view::{NavAction, View, register_event_on};
 use oxivgl::widgets::{AsLvHandle, Button, Label, Obj, RADIUS_MAX, TextAlign, WidgetError};
 
+use crate::board::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::oxivgl::fonts::{MONTSERRAT_14, MONTSERRAT_16};
 use crate::oxivgl::touch_dbg;
 
@@ -32,24 +33,27 @@ const MUTED: u32 = 0x665F54;
 const ACCENT: u32 = 0xA37418;
 const LOGO: u32 = 0x6F6A62;
 
-/// Panel layout tuned for 800×480 — maximize touch targets.
-const SHELL_X: i32 = 16;
-const SHELL_Y: i32 = 12;
-const SHELL_W: i32 = 768;
-const SHELL_H: i32 = 456;
+/// Panel layout tuned for 800×480 — full-bleed shell, maximize touch targets.
+const SHELL_X: i32 = 0;
+const SHELL_Y: i32 = 0;
+const SHELL_W: i32 = DISPLAY_WIDTH as i32;
+const SHELL_H: i32 = DISPLAY_HEIGHT as i32;
 
 const CARD_X0: i32 = 10;
-const CARD_COL_PITCH: i32 = 148;
+const CARD_COL_PITCH: i32 = CARD_W + (SHELL_W - 2 * CARD_X0 - 5 * CARD_W) / 4;
 const CARD_W: i32 = 140;
 const CARD_Y: i32 = 56;
-const CARD_H: i32 = 388;
+const CARD_H: i32 = SHELL_H - CARD_Y;
 const CARD_PAD_X: i32 = 10;
 const CARD_LABEL_W: i32 = CARD_W - CARD_PAD_X * 2;
 
-const BUTTON_W: i32 = 120;
-const BUTTON_H: i32 = 96;
+const BUTTON_TRIM: i32 = 2;
+const BUTTON_W: i32 = 120 - BUTTON_TRIM;
 const BUTTON_Y0: i32 = 58;
-const BUTTON_Y_STEP: i32 = 106;
+const BUTTON_GAP: i32 = 10;
+const BUTTON_ZONE_H: i32 = CARD_H - BUTTON_Y0;
+const BUTTON_H: i32 = (BUTTON_ZONE_H - 2 * BUTTON_GAP) / 3 - BUTTON_TRIM;
+const BUTTON_Y_STEP: i32 = BUTTON_H + BUTTON_GAP;
 const BUTTON_LABEL_W: i32 = BUTTON_W - 8;
 
 struct ColumnSpec {
@@ -108,6 +112,8 @@ impl View for WidgetView {
         self.objects.clear();
 
         container
+            .size(DISPLAY_WIDTH as i32, DISPLAY_HEIGHT as i32)
+            .pos(0, 0)
             .bg_color(SCREEN_BG)
             .bg_opa(255)
             .style_bg_grad_dir(GradDir::None, Selector::DEFAULT)
@@ -122,7 +128,7 @@ impl View for WidgetView {
             .bg_opa(255)
             .style_bg_grad_dir(GradDir::None, Selector::DEFAULT)
             .border_width(0)
-            .radius(18, Selector::DEFAULT)
+            .radius(0, Selector::DEFAULT)
             .remove_scrollable()
             .pad(0);
 
@@ -178,6 +184,7 @@ impl View for WidgetView {
 
         self.objects.push(shell);
         container.update_layout();
+        container.invalidate();
         Ok(())
     }
 
