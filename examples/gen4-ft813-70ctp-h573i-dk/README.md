@@ -116,13 +116,15 @@ the FT81x default (X in the low 16 bits, Y in the high 16), which `Ft81x::touch`
 compensates for. Coordinates are raw/uncalibrated — run `CMD_CALIBRATE` for an
 exact finger-to-pixel mapping.
 
-While the panel is scanning (DISP high) the capacitive touch is sensitive to
-display noise / ground bounce over the flywire hookup: on a weak module ground
-it drops out (frozen `0x8000_8000`) or reports phantom touches, yet it works
-perfectly with the display off. This is a hardware wiring issue, not a driver
-bug — the fixes are **solid, short GND (several wires)** and a **bulk cap
-(~47–100 µF) across the module's VCC/GND**. Lowering `REG_PCLK` or enabling
-`REG_CSPREAD` did not help.
+Panel timings must be applied **after** the first co-processor frame while
+`REG_PCLK` is still off ([`Ft81x::apply_panel_timings`]), then
+[`Ft81x::enable_display`] asserts DISP and starts the pixel clock. Do not
+re-write timings inside `enable_display` — that was a regression in the
+timing-fix commit.
+
+While the panel is scanning, touch can also drop out on a marginal power hookup
+(weak module GND / insufficient current when the backlight ramps). Solid, short
+GND wires and adequate supply to the module are required.
 
 ## Build
 

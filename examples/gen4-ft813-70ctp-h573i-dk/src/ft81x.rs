@@ -14,8 +14,9 @@
 //! transferred, which is plenty for a widget UI.
 //!
 //! References: FT81x datasheet + BRT_AN_033 (EVE2 programming guide); panel
-//! timings match the 4D Systems gen4-FT812/FT813 entries in well-known EVE
-//! libraries (standard 800×480 WVGA set, no external crystal → `CLKINT`).
+//! timings from the 4D Systems gen4 module datasheet ("7.0" LCD Timing
+//! Characteristic (TN)"). The module fits a 12 MHz crystal → `CLKEXT`
+//! (with a one-shot `CLKINT` fallback for crystal-less revisions).
 
 use embassy_stm32::gpio::Output;
 use embassy_stm32::mode::Blocking;
@@ -313,10 +314,11 @@ impl Ft81x {
     /// ([`Ft81x::set_spi_frequency`]) and loading the first frame, call
     /// [`Ft81x::enable_display`] + [`Ft81x::set_backlight`] to light it up.
     pub async fn init(&mut self) -> Result<(), Error> {
-        // gen4-FT813 modules run from the FT813's internal oscillator. Try
-        // CLKINT first and fall back to CLKEXT once, in case a module variant
-        // ships a crystal after all.
-        for (attempt, clk) in [HCMD_CLKINT, HCMD_CLKEXT].into_iter().enumerate() {
+        // The gen4-FT81x schematic (REV 1.3) fits a 12 MHz crystal on the
+        // FT813, so prefer CLKEXT (measured 60.000 MHz core clock vs ~60.3 MHz
+        // from the internal RC oscillator). Fall back to CLKINT once, for
+        // module revisions without the crystal.
+        for (attempt, clk) in [HCMD_CLKEXT, HCMD_CLKINT].into_iter().enumerate() {
             self.power_cycle().await;
             self.host_command(clk)?;
             self.host_command(HCMD_ACTIVE)?;
@@ -324,7 +326,9 @@ impl Ft81x {
 
             if self.poll_chip_id().await? {
                 if attempt > 0 {
-                    defmt::info!("ft81x: came up with CLKEXT fallback");
+                    defmt::warn!("ft81x: no REG_ID with CLKEXT — running on the internal oscillator (CLKINT)");
+                } else {
+                    defmt::info!("ft81x: clock source CLKEXT (12 MHz crystal)");
                 }
                 return self.configure().await;
             }
@@ -355,16 +359,12 @@ impl Ft81x {
     }
 
     async fn configure(&mut self) -> Result<(), Error> {
-        // Reset the co-processor and clear its FIFO pointers first. A previous
-        // run halted mid-command (e.g. the debugger stopped the MCU during an
-        // SPI burst) can leave the co-processor wedged so the first CMD_SWAP
-        // never drains; the PDN power-cycle alone does not always clear it.
-        self.wr8(REG_CPURESET, 1)?;
-        self.wr32(REG_CMD_READ, 0)?;
-        self.wr32(REG_CMD_WRITE, 0)?;
-        self.wr8(REG_CPURESET, 0)?;
-
-        // Wait for the graphics engine + co-processor to leave reset.
+        // Wait for the boot ROM to release all engines from reset. This MUST
+        // happen before anything is written to REG_CPURESET: right after
+        // REG_ID goes 0x7C the touch engine is still booting, and writing the
+        // register in that window rips it out of reset mid-initialisation —
+        // capacitive touch then stays dead (REG_TOUCH_SCREEN_XY stuck at
+        // 0x0000_0000, a permanent phantom press at the origin).
         let deadline = Instant::now() + Duration::from_millis(400);
         while self.rd8(REG_CPURESET)? != 0 {
             if Instant::now() >= deadline {
@@ -372,6 +372,17 @@ impl Ft81x {
             }
             Timer::after_millis(5).await;
         }
+
+        // Reset the co-processor and clear its FIFO pointers. A previous run
+        // that was halted mid-command (e.g. the debugger stopped the MCU during
+        // an SPI burst) can leave the co-processor wedged so the first CMD_SWAP
+        // never drains; the PDN power-cycle alone does not always clear it.
+        // REG_CPURESET bit 0 = co-processor only (touch/audio untouched).
+        self.wr8(REG_CPURESET, 1)?;
+        self.wr32(REG_CMD_READ, 0)?;
+        self.wr32(REG_CMD_WRITE, 0)?;
+        self.wr8(REG_CPURESET, 0)?;
+        Timer::after_millis(2).await;
 
         // Capacitive touch: compatibility mode (single touch), continuous.
         self.wr8(REG_CTOUCH_EXTENDED, 1)?;
@@ -384,29 +395,19 @@ impl Ft81x {
         // Sync our local FIFO write pointer with the co-processor's.
         self.cmd_offset = (self.rd32(REG_CMD_WRITE)? & 0x0FFF) as u16;
 
-        // The FT81x ignores writes to the panel-timing registers (V-timing in
-        // particular) until the co-processor has executed its first display
-        // list — before that they read back 0, and the co-processor then
-        // installs its own 480×272 defaults, which drive only the top of the
-        // panel and leave the lower part streaky. So run one blank coproc frame
-        // first, THEN apply the real timings; they stick and persist afterwards.
+        // Blank co-processor frame so later timing writes stick. Apply the real
+        // panel timings after the first visible frame ([`Ft81x::apply_panel_timings`])
+        // while PCLK is still off.
         self.co_start()?;
         self.co_cmd(dl_clear_color_rgb(0, 0, 0))?;
         self.co_cmd(dl_clear())?;
         self.co_cmd(dl_display())?;
         self.co_swap()?;
         self.co_run().await?;
-        // The timings are applied in `enable_display`, not here: a later
-        // `set_spi_frequency` resets the co-processor display state, so the
-        // next frame re-installs the 480×272 defaults. Applying them as part of
-        // the final bring-up (after the last SPI-speed change + first frame)
-        // makes them stick.
 
         // NB: DISP and the pixel clock are deliberately *not* enabled here.
-        // Enabling REG_PCLK and then reconfiguring the SPI master (e.g.
-        // set_spi_frequency) leaves REG_PCLK cleared again on the H573I-DK,
-        // so the panel would go dark. Call [`Ft81x::enable_display`] as the
-        // last bring-up step, after the final SPI speed and the first frame.
+        // Call [`Ft81x::enable_display`] as the last bring-up step, after the
+        // final SPI speed and the first co-processor frame.
 
         defmt::info!("ft81x: init ok (REG_ID=0x7c, 800x480, display still off)");
         Ok(())
@@ -415,19 +416,14 @@ impl Ft81x {
     /// Enable the panel output: drive DISP high (`REG_GPIOX` bit 15) and start
     /// the pixel clock (`REG_PCLK`).
     ///
-    /// Call this **last**, after [`Ft81x::set_spi_frequency`] and after the
-    /// first frame has been loaded. Writing `REG_PCLK` before the final SPI
-    /// reconfiguration leaves it cleared again (observed on the H573I-DK:
-    /// `set_config` toggles SPE and the FT813 loses the pixel clock).
+    /// Call this **last**, after [`Ft81x::set_spi_frequency`], the first
+    /// co-processor frame, and [`Ft81x::apply_panel_timings`]. Writing
+    /// `REG_PCLK` before the final SPI reconfiguration leaves it cleared again
+    /// (observed on the H573I-DK: `set_config` toggles SPE and the FT813 loses
+    /// the pixel clock).
     pub fn enable_display(&mut self) -> Result<(), Error> {
-        // Apply the panel timings here — as the final bring-up step, after the
-        // last set_spi_frequency and the first co-processor frame. Written any
-        // earlier they are ignored (V-timing reads back 0 / reverts to the
-        // 480×272 defaults, streaky lower screen). See `configure`.
-        self.set_panel_timings()?;
         self.enable_disp()?;
-        self.wr8(REG_PCLK, PCLK_DIV)?;
-        Ok(())
+        self.wr8(REG_PCLK, PCLK_DIV)
     }
 
     /// Drive DISP high (`REG_GPIOX` bit 15) without starting the pixel clock.
@@ -529,7 +525,7 @@ impl Ft81x {
     /// the co-processor has run its first display list — before that the FT81x
     /// ignores these writes (they read back 0 and the co-processor installs its
     /// 480×272 defaults). See [`Ft81x::configure`].
-    fn set_panel_timings(&mut self) -> Result<(), Error> {
+    pub fn apply_panel_timings(&mut self) -> Result<(), Error> {
         self.wr16(REG_HSIZE, DISPLAY_WIDTH as u16)?;
         self.wr16(REG_HCYCLE, H_CYCLE)?;
         self.wr16(REG_HOFFSET, H_OFFSET)?;
@@ -663,12 +659,6 @@ impl Ft81x {
             self.wr_bytes(addr, &px[row * row_bytes..][..row_bytes])?;
         }
         Ok(())
-    }
-
-    /// Read the raw `REG_TOUCH_SCREEN_XY` word (for touch diagnostics).
-    /// `0x8000_8000` means "not touched".
-    pub fn touch_raw(&mut self) -> Result<u32, Error> {
-        self.rd32(REG_TOUCH_SCREEN_XY)
     }
 
     /// Set `REG_PCLK` directly (0 = pixel clock off / display blank, the

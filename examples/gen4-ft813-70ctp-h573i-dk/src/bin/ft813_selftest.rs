@@ -4,20 +4,9 @@
 //! FT813 co-processor bring-up smoke test — no LVGL, builds with default
 //! features.
 //!
-//! Drives the FT813 as a real EVE **co-processor** (RAM_CMD FIFO): each frame
-//! is a display list built with `CMD_DLSTART … CMD_SWAP` that clears the
-//! screen, paints eight colour bars (`RECTS`), prints a line of text
-//! (`CMD_TEXT`) and — while the panel is touched — draws a marker (`POINTS`)
-//! at the touch position, so you can see the touch land on screen.
-//!
 //! ```bash
 //! cargo run --release --bin ft813_selftest
 //! ```
-//!
-//! Note: touch coordinates are uncalibrated (raw), so the marker tracks the
-//! finger only roughly; and with the panel scanning, capacitive touch is
-//! sensitive to display-noise coupling over the flywire hookup (solid ground
-//! matters). See the `gen4-ft813-touch-vs-display-emi` note.
 
 use defmt::{info, unwrap};
 use embassy_executor::Spawner;
@@ -30,8 +19,6 @@ use embassy_gen4_ft813_70ctp_h573i_dk_examples::ft81x::{
 use embassy_time::Timer;
 use {defmt_rtt as _, panic_probe as _};
 
-/// Eight vertical bars, 24-bit RGB: white, yellow, cyan, green, magenta, red,
-/// blue, black.
 const BARS: [(u8, u8, u8); 8] = [
     (0xFF, 0xFF, 0xFF),
     (0xFF, 0xFF, 0x00),
@@ -43,13 +30,11 @@ const BARS: [(u8, u8, u8); 8] = [
     (0x00, 0x00, 0x00),
 ];
 
-/// Build and swap one co-processor frame: colour bars + text, plus a touch
-/// marker at `mark` (panel pixels) when `Some`.
 async fn draw_frame(eve: &mut Ft81x, mark: Option<(i16, i16)>) -> Result<(), Error> {
-    eve.co_start()?; // CMD_DLSTART
+    eve.co_start()?;
     eve.co_cmd(dl_clear_color_rgb(0, 0, 0))?;
     eve.co_cmd(dl_clear())?;
-    eve.co_cmd(dl_vertex_format(0))?; // VERTEX2F in whole pixels
+    eve.co_cmd(dl_vertex_format(0))?;
 
     let bar_w = (DISPLAY_WIDTH / BARS.len()) as i16;
     let bottom = (DISPLAY_HEIGHT - 1) as i16;
@@ -76,21 +61,20 @@ async fn draw_frame(eve: &mut Ft81x, mark: Option<(i16, i16)>) -> Result<(), Err
         "FT813 co-processor OK",
     )?;
 
-    // Touch marker: white ring with a red centre so it shows on any bar.
     if let Some((x, y)) = mark {
         eve.co_cmd(dl_begin(POINTS))?;
         eve.co_cmd(dl_color_rgb(0xFF, 0xFF, 0xFF))?;
-        eve.co_cmd(dl_point_size(224))?; // ~14 px
+        eve.co_cmd(dl_point_size(224))?;
         eve.co_cmd(dl_vertex2f(x, y))?;
         eve.co_cmd(dl_color_rgb(0xFF, 0x00, 0x00))?;
-        eve.co_cmd(dl_point_size(112))?; // ~7 px centre
+        eve.co_cmd(dl_point_size(112))?;
         eve.co_cmd(dl_vertex2f(x, y))?;
         eve.co_cmd(dl_end())?;
     }
 
     eve.co_cmd(dl_display())?;
-    eve.co_swap()?; // CMD_SWAP
-    eve.co_run().await // submit + wait for the FIFO to drain
+    eve.co_swap()?;
+    eve.co_run().await
 }
 
 #[embassy_executor::main]
@@ -103,17 +87,12 @@ async fn main(_spawner: Spawner) -> ! {
     unwrap!(eve.init().await);
     eve.set_spi_frequency(board::SPI_RUN_HZ);
 
-    // First frame (no marker), then light up the panel and backlight.
     unwrap!(draw_frame(&mut eve, None).await);
+    unwrap!(eve.apply_panel_timings());
     unwrap!(eve.enable_display());
     unwrap!(eve.set_backlight(96));
-    unwrap!(eve.log_timing()); // verify the timings held through bring-up
-    let (mode, ext) = unwrap!(eve.touch_config());
-    info!("touch cfg: REG_TOUCH_MODE={} REG_CTOUCH_EXTENDED={} (expect 3, 1)", mode, ext);
     info!("co-processor frame up — touch the panel");
 
-    // Debounce press/release; while pressed, draw the marker at the latest
-    // valid touch position and redraw only when it moves.
     const PRESS_SAMPLES: u8 = 2;
     const RELEASE_SAMPLES: u8 = 4;
     let mut pressed = false;
