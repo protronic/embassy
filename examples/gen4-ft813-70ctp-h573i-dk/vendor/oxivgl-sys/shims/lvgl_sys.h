@@ -10,6 +10,10 @@ extern "C"
 
 #include "lvgl.h"
 
+#if LV_USE_DRAW_EVE
+#include "src/drivers/draw/eve/lv_draw_eve_display.h"
+#endif
+
     lv_color_t _LV_COLOR_MAKE(uint8_t r, uint8_t g, uint8_t b);
 
 #ifdef __cplusplus

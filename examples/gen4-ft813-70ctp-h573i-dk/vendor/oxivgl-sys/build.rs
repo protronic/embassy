@@ -145,6 +145,7 @@ fn main() {
     let out_path = PathBuf::from(env::var("OUT_DIR").unwrap());
     let lvgl_dir = ensure_lvgl_source(&out_path);
     let lvgl_src = lvgl_dir.join("src");
+    let eve_gpu = env::var("CARGO_FEATURE_EVE_GPU").is_ok();
 
     #[cfg(feature = "rust_timer")]
     let timer_shim = shims_dir.join("timer");
@@ -281,6 +282,9 @@ fn main() {
         .include(&lvgl_src)
         .warnings(false)
         .include(&lv_config_dir);
+    if eve_gpu {
+        cfg.define("GEN4_FT813_EVE_GPU", Some("1"));
+    }
     if let Some(p) = &font_extra_src {
         cfg.include(p);
     }
@@ -306,6 +310,9 @@ fn main() {
         lvgl_dir.to_str().unwrap(),
         "-fvisibility=default",
     ];
+    if eve_gpu {
+        cc_args.push("-DGEN4_FT813_EVE_GPU");
+    }
 
     // For Xtensa targets, auto-detect the ESP-capable clang if LIBCLANG_PATH
     // doesn't already point to one. The system clang doesn't understand Xtensa.
@@ -352,6 +359,9 @@ fn main() {
     // with arm-none-eabi-gcc so `inttypes.h` / `stdint.h` resolve when
     // cross-compiling for bare-metal thumb targets (the system clang headers
     // alone fail with "'inttypes.h' file not found").
+    if eve_gpu {
+        additional_args.push("-DGEN4_FT813_EVE_GPU".to_string());
+    }
     if target.contains("-none-") && target.contains("thumb") {
         for inc in ["/usr/lib/arm-none-eabi/include", "/usr/arm-none-eabi/include"] {
             if std::path::Path::new(inc).join("inttypes.h").exists() {

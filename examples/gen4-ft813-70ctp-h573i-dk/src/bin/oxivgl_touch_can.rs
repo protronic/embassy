@@ -32,11 +32,13 @@ use embassy_gen4_ft813_70ctp_h573i_dk_examples::canboss::canbus;
 use embassy_gen4_ft813_70ctp_h573i_dk_examples::firmware_id::FIRMWARE_ID;
 use embassy_gen4_ft813_70ctp_h573i_dk_examples::ft81x::Ft81x;
 use embassy_gen4_ft813_70ctp_h573i_dk_examples::oxivgl::hall_platform;
+#[cfg(not(feature = "eve"))]
 use embassy_gen4_ft813_70ctp_h573i_dk_examples::oxivgl::platform::LVGL_BUF_BYTES;
 use embassy_gen4_ft813_70ctp_h573i_dk_examples::touch_can;
 use embassy_stm32::can::{CanRx, CanTx};
 use embassy_time::Timer;
 use embedded_alloc::LlffHeap as Heap;
+#[cfg(not(feature = "eve"))]
 use oxivgl::display::LvglBuffers;
 use static_cell::StaticCell;
 use touch_hall_common::{CAN_BAUD, CAN_ENABLED, HALL_NAME};
@@ -51,6 +53,7 @@ const HEAP_SIZE: usize = 256 * 1024;
 static HEAP: Heap = Heap::empty();
 
 static mut HEAP_MEM: MaybeUninit<[u8; HEAP_SIZE]> = MaybeUninit::uninit();
+#[cfg(not(feature = "eve"))]
 static mut LVGL_BUFS: LvglBuffers<{ LVGL_BUF_BYTES }> = LvglBuffers::new();
 static EVE: StaticCell<Ft81x> = StaticCell::new();
 
@@ -76,17 +79,17 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     let mut eve = board::init_ft813(p.SPI2, p.PI1, p.PB15, p.PI2, p.PA3, p.PA8);
-    unwrap!(eve.init().await);
 
-    // Black framebuffer + static scan-out display list, then full SPI speed
-    // and backlight on: the panel shows black until LVGL paints the first
-    // frame a few ticks later.
-    unwrap!(eve.clear_framebuffer(0x0000));
-    unwrap!(eve.show_framebuffer());
-    eve.set_spi_frequency(board::SPI_RUN_HZ);
-    unwrap!(eve.apply_panel_timings());
-    unwrap!(eve.enable_display());
-    unwrap!(eve.set_backlight(96));
+    #[cfg(not(feature = "eve"))]
+    {
+        unwrap!(eve.init().await);
+        unwrap!(eve.co_clear_framebuffer(0x0000));
+        unwrap!(eve.co_show_framebuffer().await);
+        eve.set_spi_frequency(board::SPI_RUN_HZ);
+        unwrap!(eve.apply_panel_timings());
+        unwrap!(eve.enable_display());
+        unwrap!(eve.set_backlight(96));
+    }
 
     if CAN_ENABLED {
         let mut can = board::init_can(p.FDCAN2, p.PB5, p.PB6);
@@ -101,16 +104,29 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     let eve = EVE.init(eve);
-    // SAFETY: static LVGL stripe buffers are only used from the UI task.
-    let bufs = unsafe { &mut LVGL_BUFS };
-    spawner.spawn(unwrap!(ui_task(eve, bufs)));
+    #[cfg(not(feature = "eve"))]
+    {
+        let bufs = unsafe { &mut LVGL_BUFS };
+        spawner.spawn(unwrap!(ui_task(eve, bufs)));
+    }
+    #[cfg(feature = "eve")]
+    {
+        spawner.spawn(unwrap!(ui_task(eve)));
+    }
 
     loop {
         Timer::after_secs(60).await;
     }
 }
 
+#[cfg(not(feature = "eve"))]
 #[embassy_executor::task]
 async fn ui_task(eve: &'static mut Ft81x, bufs: &'static mut LvglBuffers<{ LVGL_BUF_BYTES }>) -> ! {
     hall_platform::run_hall_demo(eve, bufs).await
+}
+
+#[cfg(feature = "eve")]
+#[embassy_executor::task]
+async fn ui_task(eve: &'static mut Ft81x) -> ! {
+    hall_platform::run_hall_demo(eve).await
 }

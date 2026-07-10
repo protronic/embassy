@@ -48,15 +48,28 @@ TJA1051T/3, …) between the MCU pins and the bus:
 ```text
 LVGL v9.5 (PARTIAL render mode, RGB565)
     └─ renders dirty areas into 2 × 39-line SRAM stripe buffers
-flush callback ──SPI──▶ FT813 RAM_G (1 MiB) framebuffer @ 0x000000
-static EVE display list: fullscreen BITMAP scan-out @ 60 Hz panel refresh
+flush callback ──host SPI burst──▶ FT813 RAM_G (1 MiB) @ 0x000000
+EVE display list (co-processor): fullscreen BITMAP scan-out @ 60 Hz
 FT813 touch engine ──SPI poll (REG_TOUCH_SCREEN_XY)──▶ LVGL pointer indev
 ```
 
-The FT813 is used as a *dumb framebuffer*: no co-processor (`RAM_CMD`) usage,
-just direct `RAM_G` writes. 800×480×2 = 768 000 B of the 1 MiB `RAM_G` hold the
-framebuffer; the display list is written once and the panel rescans it
-continuously, so a flushed rectangle appears on the next refresh.
+LVGL pixels reach `RAM_G` through fast host SPI writes ([`Ft81x::blit`]); the
+bitmap display list is built once by the EVE co-processor with
+[`Ft81x::co_show_framebuffer`]. 800×480×2 = 768 000 B of the 1 MiB `RAM_G`
+hold the framebuffer; the panel rescans it continuously, so a flushed rectangle
+appears on the next refresh.
+
+### EVE GPU renderer (`eve` feature)
+
+Optional: LVGL's [EVE External GPU Renderer](https://lvgl.io/docs/open/integration/external_display_controllers/eve/gpu)
+(`LV_USE_DRAW_EVE`). LVGL sends draw commands to the FT813 co-processor instead
+of software-rendering pixels into `RAM_G`. No SRAM stripe buffers are needed.
+
+Side-by-side comparison: [RENDER_MODES.md](RENDER_MODES.md).
+
+```bash
+cargo run --release --bin canboss_touch --features oxivgl-demo,eve
+```
 
 SPI runs at 7.8 MHz during FT813 power-up (spec: ≤ 11 MHz) and 15.625 MHz
 afterwards (250 MHz SPI2 kernel clock / 16; the next step, /8 = 31.25 MHz,
@@ -146,6 +159,9 @@ cargo run --release --bin oxivgl_touch_can --features oxivgl-demo
 
 # CANbossTouch Rust-Port: CANopen-Bediengeraet (EDS-Screens + SDO-Client)
 cargo run --release --bin canboss_touch --features oxivgl-demo
+
+# Same demos with LVGL EVE GPU renderer (co-processor draws widgets)
+cargo run --release --bin canboss_touch --features oxivgl-demo,eve
 ```
 
 `ft813_selftest` paints eight colour bars and logs touch coordinates — run it

@@ -1,14 +1,12 @@
 //! Navigator-UI-Loop des CANbossTouch-Rust-Ports auf der FT81x-Pipeline.
-//!
-//! Kombiniert den Render-/Touch-Pfad aus [`crate::oxivgl::platform`]
-//! (LVGL-PARTIAL-Streifen per SPI ins RAM_G, Touch-Poll der FT813-Engine)
-//! mit dem [`Navigator`](oxivgl::navigator::Navigator)-Scan aus
-//! `oxivgl::view::run_app_nav` (Push/Pop der Views, Event-Aktionen).
 
 extern crate alloc;
 
 use embassy_time::{Duration, Instant, Timer};
+#[cfg(not(feature = "eve"))]
 use oxivgl::display::{DISPLAY_READY, LvglBuffers};
+#[cfg(feature = "eve")]
+use oxivgl::display::DISPLAY_READY;
 use oxivgl::driver::LvglDriver;
 use oxivgl::navigator::Navigator;
 use oxivgl::view::NavAction;
@@ -19,24 +17,34 @@ use crate::canboss::views::menu::MenuView;
 use crate::ft81x::Ft81x;
 use crate::oxivgl::display::Ft813Display;
 use crate::oxivgl::indev::TouchInput;
+#[cfg(not(feature = "eve"))]
 use crate::oxivgl::platform::{LVGL_BUF_BYTES, poll_touch};
+#[cfg(feature = "eve")]
+use crate::oxivgl::platform::poll_touch;
+use crate::oxivgl::stats;
 
 const LVGL_TICK_MS: u64 = LV_DEF_REFR_PERIOD as u64 / 4;
 const UI_TICK_MS: u64 = 5;
-/// Abstand der Navigator-Scans (View::update + NavAction-Verarbeitung).
 const SCAN_PERIOD_MS: u64 = 33;
+const HEARTBEAT_TICKS: u32 = 400; // ~2 s at 5 ms UI tick
 
-/// CANbossTouch-App ausfuehren (Menue → Knoten-Screens / PoC-Hallenlicht).
-///
-/// `eve` muss initialisiert sein und den `RAM_G`-Framebuffer scannen
-/// ([`Ft81x::init`] + [`Ft81x::show_framebuffer`]).
+#[cfg(not(feature = "eve"))]
 pub async fn run_canboss_app(eve: &'static mut Ft81x, bufs: &'static mut LvglBuffers<{ LVGL_BUF_BYTES }>) -> ! {
     let driver = LvglDriver::init(DISPLAY_WIDTH as i32, DISPLAY_HEIGHT as i32);
     let _display = Ft813Display::init(eve, bufs);
+    run_canboss_ui_loop(driver).await
+}
 
+#[cfg(feature = "eve")]
+pub async fn run_canboss_app(eve: &'static mut Ft81x) -> ! {
+    let driver = LvglDriver::init(DISPLAY_WIDTH as i32, DISPLAY_HEIGHT as i32);
+    let _display = Ft813Display::init(eve);
+    run_canboss_ui_loop(driver).await
+}
+
+async fn run_canboss_ui_loop(driver: LvglDriver) -> ! {
     DISPLAY_READY.wait().await;
 
-    // Widgets (Switch/Slider/Spinbox/Bar) im protronic-Akzent statt LVGL-Default.
     crate::canboss::views::apply_accent_theme();
 
     let mut nav = Navigator::new();
@@ -46,8 +54,13 @@ pub async fn run_canboss_app(eve: &'static mut Ft81x, bufs: &'static mut LvglBuf
     let mut last_pressed = false;
     let mut next_scan = Instant::now();
     let mut next_lvgl_tick = Instant::now();
+    let mut heartbeat_ticks: u32 = 0;
 
-    defmt::info!("canboss UI loop starting (navigator)");
+    defmt::info!(
+        "canboss UI loop starting (mode={}, {})",
+        crate::render_mode::NAME,
+        crate::render_mode::DETAIL
+    );
 
     loop {
         Timer::after(Duration::from_millis(UI_TICK_MS)).await;
@@ -55,8 +68,6 @@ pub async fn run_canboss_app(eve: &'static mut Ft81x, bufs: &'static mut LvglBuf
         let had_touch = poll_touch(&touch, &mut last_pressed);
         let now = Instant::now();
 
-        // LVGL-Timer regelmaessig treiben; bei Touch sofort, damit
-        // Press/Release-Uebergaenge ohne Verzoegerung gerendert werden.
         if had_touch || now >= next_lvgl_tick {
             driver.timer_handler();
             next_lvgl_tick = now + Duration::from_millis(LVGL_TICK_MS);
@@ -67,7 +78,6 @@ pub async fn run_canboss_app(eve: &'static mut Ft81x, bufs: &'static mut LvglBuf
         }
         next_scan = now + Duration::from_millis(SCAN_PERIOD_MS);
 
-        // Navigator-Scan: aktive View/Modal updaten, Aktionen verarbeiten
         let action = nav
             .active_view_mut()
             .map(|v| v.update())
@@ -94,5 +104,10 @@ pub async fn run_canboss_app(eve: &'static mut Ft81x, bufs: &'static mut LvglBuf
 
         nav.drain_toast_requests();
         nav.tick_toast();
+
+        heartbeat_ticks += 1;
+        if heartbeat_ticks % HEARTBEAT_TICKS == 0 {
+            stats::log_heartbeat();
+        }
     }
 }

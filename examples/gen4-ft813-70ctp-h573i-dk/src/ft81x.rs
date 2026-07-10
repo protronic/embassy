@@ -1,17 +1,12 @@
 //! Minimal FT81x (EVE2) host driver over blocking SPI.
 //!
 //! Targets the FT813 inside 4D Systems **gen4-FT813-xx** display modules
-//! (here: gen4-FT813-70CTP-CLB, 800×480 with capacitive touch). The EVE chip
-//! is used as a *dumb framebuffer*: the host renders RGB565 pixels (LVGL
-//! partial stripes) and writes them into the FT813's 1 MiB graphics RAM
-//! (`RAM_G`) over SPI; a static display list scans that bitmap out to the
-//! panel every frame. Touch is read back from the FT813's built-in capacitive
-//! touch engine (`REG_TOUCH_SCREEN_XY`) over the same SPI bus.
-//!
-//! This deliberately avoids the EVE co-processor (`RAM_CMD`) — no command
-//! FIFO handling, no co-processor faults — at the cost of raw SPI bandwidth
-//! for pixel data. With LVGL in PARTIAL render mode only dirty rectangles are
-//! transferred, which is plenty for a widget UI.
+//! (here: gen4-FT813-70CTP-CLB, 800×480 with capacitive touch). LVGL renders
+//! RGB565 partial stripes on the host; pixels are uploaded into `RAM_G` with
+//! fast host SPI bursts ([`Ft81x::blit`]). The EVE co-processor builds the
+//! bitmap display list once ([`Ft81x::co_show_framebuffer`]) and the FT813
+//! continuously scans `RAM_G` out to the panel. Touch is read from the
+//! built-in capacitive engine (`REG_TOUCH_SCREEN_XY`) over the same SPI bus.
 //!
 //! References: FT81x datasheet + BRT_AN_033 (EVE2 programming guide); panel
 //! timings from the 4D Systems gen4 module datasheet ("7.0" LCD Timing
@@ -36,6 +31,7 @@ pub const FRAME_BYTES: usize = LINE_STRIDE * DISPLAY_HEIGHT;
 // ── FT81x memory map ────────────────────────────────────────────────────────
 /// Graphics RAM (1 MiB) — holds the RGB565 framebuffer at offset 0.
 pub const RAM_G: u32 = 0x00_0000;
+#[allow(dead_code)]
 const RAM_DL: u32 = 0x30_0000;
 /// Co-processor command ring buffer (4 KiB).
 const RAM_CMD: u32 = 0x30_8000;
@@ -56,6 +52,7 @@ const REG_VOFFSET: u32 = 0x30_2044;
 const REG_VSIZE: u32 = 0x30_2048;
 const REG_VSYNC0: u32 = 0x30_204C;
 const REG_VSYNC1: u32 = 0x30_2050;
+#[allow(dead_code)]
 const REG_DLSWAP: u32 = 0x30_2054;
 const REG_DITHER: u32 = 0x30_2060;
 const REG_SWIZZLE: u32 = 0x30_2064;
@@ -82,25 +79,42 @@ const HCMD_RST_PULSE: u8 = 0x68;
 const CMD_DLSTART: u32 = 0xFFFF_FF00;
 const CMD_SWAP: u32 = 0xFFFF_FF01;
 const CMD_TEXT: u32 = 0xFFFF_FF0C;
+/// Write bytes into FT81x graphics memory (`RAM_G`, …).
+const CMD_MEMWRITE: u32 = 0xFFFF_FF1A;
+/// Zero a block of memory.
+const CMD_MEMZERO: u32 = 0xFFFF_FF1C;
+/// Max payload bytes per `CMD_MEMWRITE` submission (4 KiB FIFO minus headers).
+const CO_MEMWRITE_CHUNK: usize = 4000;
 /// `REG_CMD_READ` reports this sentinel when the co-processor has faulted.
 const CMD_FAULT: u16 = 0x0FFF;
 
 // ── Panel timings: 4D Systems gen4-FT813-70 (7.0" 800×480), from the module
 // datasheet's "7.0" LCD Timing Characteristic (TN)" table (TYP values).
-// H: Th=928, Thdisp=800, Thw=4, Thbp=40 -> HOFFSET=Thw+Thbp=44
-// V: Tv=525, Tvdisp=480, Tvw=1, Tvbp=31 -> VOFFSET=Tvw+Tvbp=32
-const H_CYCLE: u16 = 928;
-const H_OFFSET: u16 = 44;
-const H_SYNC0: u16 = 0;
-const H_SYNC1: u16 = 4;
-const V_CYCLE: u16 = 525;
-const V_OFFSET: u16 = 32;
-const V_SYNC0: u16 = 0;
-const V_SYNC1: u16 = 1;
-const PCLK_DIV: u8 = 2; // 60 MHz / 2 = 30 MHz pixel clock (panel DCLK typ 33.3, range 20..50)
-const PCLK_POL: u8 = 1; // fetch on falling edge
-const SWIZZLE: u8 = 0;
-const CSPREAD: u8 = 0; // clock spreading off (1 seemed to worsen touch on this panel)
+pub const PANEL_H_CYCLE: u16 = 928;
+pub const PANEL_H_OFFSET: u16 = 44;
+pub const PANEL_H_SYNC0: u16 = 0;
+pub const PANEL_H_SYNC1: u16 = 4;
+pub const PANEL_V_CYCLE: u16 = 525;
+pub const PANEL_V_OFFSET: u16 = 32;
+pub const PANEL_V_SYNC0: u16 = 0;
+pub const PANEL_V_SYNC1: u16 = 1;
+pub const PANEL_PCLK_DIV: u8 = 2;
+pub const PANEL_PCLK_POL: u8 = 1;
+pub const PANEL_SWIZZLE: u8 = 0;
+pub const PANEL_CSPREAD: u8 = 0;
+
+const H_CYCLE: u16 = PANEL_H_CYCLE;
+const H_OFFSET: u16 = PANEL_H_OFFSET;
+const H_SYNC0: u16 = PANEL_H_SYNC0;
+const H_SYNC1: u16 = PANEL_H_SYNC1;
+const V_CYCLE: u16 = PANEL_V_CYCLE;
+const V_OFFSET: u16 = PANEL_V_OFFSET;
+const V_SYNC0: u16 = PANEL_V_SYNC0;
+const V_SYNC1: u16 = PANEL_V_SYNC1;
+const PCLK_DIV: u8 = PANEL_PCLK_DIV;
+const PCLK_POL: u8 = PANEL_PCLK_POL;
+const SWIZZLE: u8 = PANEL_SWIZZLE;
+const CSPREAD: u8 = PANEL_CSPREAD;
 
 /// `RECTS` primitive selector for [`dl_begin`].
 pub const RECTS: u32 = 9;
@@ -175,6 +189,7 @@ pub const fn dl_end() -> u32 {
 pub const fn dl_display() -> u32 {
     0x0000_0000
 }
+#[allow(dead_code)]
 const DLSWAP_FRAME: u32 = 2;
 
 /// One capacitive touch sample in panel coordinates.
@@ -250,6 +265,32 @@ impl Ft81x {
         if self.spi.set_config(&self.config).is_err() {
             defmt::warn!("ft81x: SPI frequency {} Hz not reachable, keeping previous", hz);
         }
+    }
+
+    // ── LVGL `lv_draw_eve` SPI bridge (raw bytes; CS/PD driven by op_cb) ────
+
+    pub fn eve_cs_assert(&mut self) {
+        self.cs.set_low();
+    }
+
+    pub fn eve_cs_deassert(&mut self) {
+        self.cs.set_high();
+    }
+
+    pub fn eve_pd_set(&mut self, powered_down: bool) {
+        if powered_down {
+            self.pd.set_low();
+        } else {
+            self.pd.set_high();
+        }
+    }
+
+    pub fn eve_spi_send(&mut self, data: &[u8]) -> Result<(), Error> {
+        self.spi.blocking_write(data).map_err(Error::from)
+    }
+
+    pub fn eve_spi_receive(&mut self, data: &mut [u8]) -> Result<(), Error> {
+        self.spi.blocking_read(data).map_err(Error::from)
     }
 
     fn host_command(&mut self, cmd: u8) -> Result<(), Error> {
@@ -494,7 +535,7 @@ impl Ft81x {
     /// co-processor to drain the FIFO.
     pub async fn co_run(&mut self) -> Result<(), Error> {
         self.wr32(REG_CMD_WRITE, self.cmd_offset as u32)?;
-        let deadline = Instant::now() + Duration::from_millis(250);
+        let deadline = Instant::now() + Duration::from_millis(500);
         loop {
             let rd = (self.rd32(REG_CMD_READ)? & 0x0FFF) as u16;
             if rd == CMD_FAULT {
@@ -508,6 +549,210 @@ impl Ft81x {
             }
             Timer::after_millis(2).await;
         }
+    }
+
+    /// Blocking variant of [`Ft81x::co_run`] for LVGL flush callbacks.
+    pub fn co_run_blocking(&mut self) -> Result<(), Error> {
+        self.wr32(REG_CMD_WRITE, self.cmd_offset as u32)?;
+        let deadline = Instant::now() + Duration::from_millis(500);
+        loop {
+            let rd = (self.rd32(REG_CMD_READ)? & 0x0FFF) as u16;
+            if rd == CMD_FAULT {
+                return Err(Error::CoprocFault);
+            }
+            if rd == self.cmd_offset {
+                return Ok(());
+            }
+            if Instant::now() >= deadline {
+                return Err(Error::CoprocTimeout);
+            }
+        }
+    }
+
+    /// Reset the co-processor command FIFO after `CMD_FAULT`.
+    fn co_recover_from_fault(&mut self) -> Result<(), Error> {
+        defmt::warn!("ft81x: co-processor fault, resetting command FIFO");
+        self.wr8(REG_CPURESET, 1)?;
+        self.wr32(REG_CMD_READ, 0)?;
+        self.wr32(REG_CMD_WRITE, 0)?;
+        self.wr8(REG_CPURESET, 0)?;
+        let deadline = Instant::now() + Duration::from_millis(100);
+        while self.rd8(REG_CPURESET)? != 0 {
+            if Instant::now() >= deadline {
+                break;
+            }
+        }
+        self.cmd_offset = 0;
+        Ok(())
+    }
+
+    /// Free space in the circular `RAM_CMD` ring (bytes).
+    fn co_fifo_free(&mut self) -> Result<usize, Error> {
+        let rd = (self.rd32(REG_CMD_READ)? & 0x0FFF) as usize;
+        if rd == usize::from(CMD_FAULT) {
+            return Err(Error::CoprocFault);
+        }
+        let wr = usize::from(self.cmd_offset);
+        let free = if wr >= rd {
+            usize::from(RAM_CMD_SIZE) - (wr - rd)
+        } else {
+            rd - wr
+        };
+        Ok(free.saturating_sub(4))
+    }
+
+    /// Wait until the FIFO is idle and sync the local write pointer.
+    fn co_wait_idle(&mut self) -> Result<(), Error> {
+        let rd = (self.rd32(REG_CMD_READ)? & 0x0FFF) as u16;
+        if rd == CMD_FAULT {
+            self.co_recover_from_fault()?;
+        }
+        let wr = (self.rd32(REG_CMD_WRITE)? & 0x0FFF) as u16;
+        if rd != wr {
+            self.cmd_offset = wr;
+            return self.co_run_blocking();
+        }
+        self.cmd_offset = wr;
+        Ok(())
+    }
+
+    fn co_ensure_fifo(&mut self, needed: usize) -> Result<(), Error> {
+        loop {
+            match self.co_fifo_free() {
+                Ok(free) if free >= needed => return Ok(()),
+                Ok(_) => {
+                    if let Err(Error::CoprocFault) = self.co_run_blocking() {
+                        self.co_recover_from_fault()?;
+                    }
+                }
+                Err(Error::CoprocFault) => self.co_recover_from_fault()?,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    /// Queue `CMD_MEMWRITE` + payload without submitting yet. Drains the FIFO
+    /// when the ring does not have enough free space.
+    ///
+    /// Layout per the FT81x programmer guide: opcode, ptr, num, data (padded).
+    fn co_queue_memwrite(&mut self, addr: u32, data: &[u8]) -> Result<(), Error> {
+        let padded = data.len().div_ceil(4) * 4;
+        let needed = 12 + padded;
+        self.co_ensure_fifo(needed)?;
+        self.co_cmd(CMD_MEMWRITE)?;
+        self.co_cmd(addr)?;
+        self.co_cmd(data.len() as u32)?;
+        let mut word = [0u8; 4];
+        let mut n = 0usize;
+        for &byte in data {
+            word[n] = byte;
+            n += 1;
+            if n == 4 {
+                self.co_cmd(u32::from_le_bytes(word))?;
+                word = [0; 4];
+                n = 0;
+            }
+        }
+        if n != 0 {
+            self.co_cmd(u32::from_le_bytes(word))?;
+        }
+        Ok(())
+    }
+
+    fn co_mem_write(&mut self, addr: u32, data: &[u8]) -> Result<(), Error> {
+        match self.co_mem_write_inner(addr, data) {
+            Err(Error::CoprocFault) => {
+                self.co_recover_from_fault()?;
+                self.co_mem_write_inner(addr, data)
+            }
+            other => other,
+        }
+    }
+
+    fn co_mem_write_inner(&mut self, addr: u32, data: &[u8]) -> Result<(), Error> {
+        self.co_wait_idle()?;
+        let mut off = 0usize;
+        while off < data.len() {
+            let end = (off + CO_MEMWRITE_CHUNK).min(data.len());
+            self.co_queue_memwrite(addr + off as u32, &data[off..end])?;
+            self.co_run_blocking()?;
+            off = end;
+        }
+        Ok(())
+    }
+
+    /// Fill the whole `RAM_G` framebuffer with one RGB565 colour via the
+    /// co-processor (`CMD_MEMZERO` / `CMD_MEMWRITE`).
+    pub fn co_clear_framebuffer(&mut self, rgb565: u16) -> Result<(), Error> {
+        self.co_wait_idle()?;
+        if rgb565 == 0 {
+            self.co_cmd(CMD_MEMZERO)?;
+            self.co_cmd(RAM_G)?;
+            self.co_cmd(FRAME_BYTES as u32)?;
+            self.co_run_blocking()
+        } else {
+            let mut line = [0u8; LINE_STRIDE];
+            for px in line.chunks_exact_mut(2) {
+                px.copy_from_slice(&rgb565.to_le_bytes());
+            }
+            for y in 0..DISPLAY_HEIGHT {
+                let addr = RAM_G + (y * LINE_STRIDE) as u32;
+                self.co_mem_write(addr, &line)?;
+            }
+            Ok(())
+        }
+    }
+
+    /// Build and swap in the display list that scans `RAM_G` out to the panel.
+    pub async fn co_show_framebuffer(&mut self) -> Result<(), Error> {
+        self.co_wait_idle()?;
+        let w = DISPLAY_WIDTH as u32;
+        let h = DISPLAY_HEIGHT as u32;
+        let stride = LINE_STRIDE as u32;
+        self.co_start()?;
+        self.co_cmd(dl_clear_color_rgb(0, 0, 0))?;
+        self.co_cmd(dl_clear())?;
+        self.co_cmd(dl_bitmap_handle(0))?;
+        self.co_cmd(dl_bitmap_source(RAM_G))?;
+        self.co_cmd(dl_bitmap_layout(7, stride, h))?;
+        self.co_cmd(dl_bitmap_layout_h(stride, h))?;
+        self.co_cmd(dl_bitmap_size(w, h))?;
+        self.co_cmd(dl_bitmap_size_h(w, h))?;
+        self.co_cmd(dl_begin_bitmaps())?;
+        self.co_cmd(dl_vertex2ii(0, 0))?;
+        self.co_cmd(dl_end())?;
+        self.co_cmd(dl_display())?;
+        self.co_swap()?;
+        self.co_run().await
+    }
+
+    /// Fill the whole `RAM_G` framebuffer with one RGB565 colour via host SPI.
+    pub fn clear_framebuffer(&mut self, rgb565: u16) -> Result<(), Error> {
+        let mut line = [0u8; LINE_STRIDE];
+        for px in line.chunks_exact_mut(2) {
+            px.copy_from_slice(&rgb565.to_le_bytes());
+        }
+        for y in 0..DISPLAY_HEIGHT {
+            self.wr_bytes(RAM_G + (y * LINE_STRIDE) as u32, &line)?;
+        }
+        Ok(())
+    }
+
+    /// Copy a `w`×`h` RGB565 rectangle (`px`, row-major, little-endian) into
+    /// `RAM_G` via host SPI. LVGL flush path — one burst per full-width stripe.
+    pub fn blit(&mut self, x: usize, y: usize, w: usize, h: usize, px: &[u8]) -> Result<(), Error> {
+        let row_bytes = w * 2;
+        debug_assert!(px.len() >= row_bytes * h);
+        debug_assert!(x + w <= DISPLAY_WIDTH && y + h <= DISPLAY_HEIGHT);
+
+        if x == 0 && w == DISPLAY_WIDTH {
+            return self.wr_bytes(RAM_G + (y * LINE_STRIDE) as u32, &px[..row_bytes * h]);
+        }
+        for row in 0..h {
+            let addr = RAM_G + ((y + row) * LINE_STRIDE + x * 2) as u32;
+            self.wr_bytes(addr, &px[row * row_bytes..][..row_bytes])?;
+        }
+        Ok(())
     }
 
     /// Backlight brightness, `0..=128`.
@@ -601,63 +846,6 @@ impl Ft81x {
             gpiox,
             (gpiox & 0x8000) != 0,
         );
-        Ok(())
-    }
-
-    /// Fill the whole `RAM_G` framebuffer with one RGB565 colour.
-    pub fn clear_framebuffer(&mut self, rgb565: u16) -> Result<(), Error> {
-        let mut line = [0u8; LINE_STRIDE];
-        for px in line.chunks_exact_mut(2) {
-            px.copy_from_slice(&rgb565.to_le_bytes());
-        }
-        for y in 0..DISPLAY_HEIGHT {
-            self.wr_bytes(RAM_G + (y * LINE_STRIDE) as u32, &line)?;
-        }
-        Ok(())
-    }
-
-    /// Swap in the static display list that scans the `RAM_G` framebuffer out
-    /// to the panel. Needs to run only once; later `RAM_G` writes show up on
-    /// the next panel refresh without another DL swap.
-    pub fn show_framebuffer(&mut self) -> Result<(), Error> {
-        let w = DISPLAY_WIDTH as u32;
-        let h = DISPLAY_HEIGHT as u32;
-        let stride = LINE_STRIDE as u32;
-        let dl = [
-            dl_clear_color_rgb(0, 0, 0),
-            dl_clear(),
-            dl_bitmap_handle(0),
-            dl_bitmap_source(RAM_G),
-            dl_bitmap_layout(7, stride, h), // 7 = RGB565
-            dl_bitmap_layout_h(stride, h),
-            dl_bitmap_size(w, h),
-            dl_bitmap_size_h(w, h),
-            dl_begin_bitmaps(),
-            dl_vertex2ii(0, 0),
-            dl_end(),
-            dl_display(),
-        ];
-        for (i, cmd) in dl.iter().enumerate() {
-            self.wr32(RAM_DL + 4 * i as u32, *cmd)?;
-        }
-        self.wr32(REG_DLSWAP, DLSWAP_FRAME)
-    }
-
-    /// Copy a `w`×`h` RGB565 rectangle (`px`, row-major, little-endian) into
-    /// the framebuffer at (`x`, `y`). This is the LVGL flush path.
-    pub fn blit(&mut self, x: usize, y: usize, w: usize, h: usize, px: &[u8]) -> Result<(), Error> {
-        let row_bytes = w * 2;
-        debug_assert!(px.len() >= row_bytes * h);
-        debug_assert!(x + w <= DISPLAY_WIDTH && y + h <= DISPLAY_HEIGHT);
-
-        if x == 0 && w == DISPLAY_WIDTH {
-            // Full-width stripe → contiguous in RAM_G, single burst.
-            return self.wr_bytes(RAM_G + (y * LINE_STRIDE) as u32, &px[..row_bytes * h]);
-        }
-        for row in 0..h {
-            let addr = RAM_G + ((y + row) * LINE_STRIDE + x * 2) as u32;
-            self.wr_bytes(addr, &px[row * row_bytes..][..row_bytes])?;
-        }
         Ok(())
     }
 

@@ -57,7 +57,16 @@
 #define LV_DRAW_LAYER_SIMPLE_BUF_SIZE    (12 * 1024)   /*[bytes]*/
 #define LV_DRAW_THREAD_STACK_SIZE    (8 * 1024)   /*[bytes]*/
 
+#if defined(GEN4_FT813_EVE_GPU)
+#define LV_USE_DRAW_SW 0
+#define LV_USE_DRAW_EVE 1
+#define LV_DRAW_EVE_EVE_GENERATION 4
+#define LV_DRAW_EVE_WRITE_BUFFER_SIZE 2048
+#else
 #define LV_USE_DRAW_SW 1
+#define LV_USE_DRAW_EVE 0
+#endif
+
 #if LV_USE_DRAW_SW == 1
     #define LV_DRAW_SW_SUPPORT_RGB565       1
     #define LV_DRAW_SW_SUPPORT_RGB565_SWAPPED 1

@@ -34,7 +34,7 @@ touch-hall-common = { path = "../touch-hall-common", features = ["rhai", "defmt"
 # oxivgl-sys with `conf/lv_conf.h`). Gated behind the `oxivgl-demo` feature so
 # the board support (FT81x SPI driver + self-test) builds without the C stack.
 oxivgl = { version = "0.5.0", default-features = false, optional = true }
-oxivgl-sys = { version = "0.2.2", default-features = false, optional = true }
+oxivgl-sys = { version = "0.2.2", default-features = false, optional = true, features = [] }
 
 [build-dependencies]
 # eds/network.json fuer den CANbossTouch-Rust-Port (build.rs-Codegen)
@@ -43,6 +43,7 @@ serde_json = "1"
 [features]
 default = []
 oxivgl-demo = ["dep:oxivgl", "dep:oxivgl-sys", "dep:embedded-alloc", "dep:embedded-can", "dep:touch-hall-common"]
+eve = ["oxivgl-demo", "oxivgl-sys/eve-gpu"]
 
 [[bin]]
 # FT813 bring-up smoke test (colour bars + touch log) — no LVGL required.
