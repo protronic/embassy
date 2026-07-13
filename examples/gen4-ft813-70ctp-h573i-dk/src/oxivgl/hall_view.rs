@@ -30,6 +30,13 @@ use crate::board::{DISPLAY_HEIGHT, DISPLAY_WIDTH};
 use crate::oxivgl::fonts::{MONTSERRAT_14, MONTSERRAT_16};
 use crate::touch_can::{self, on_button_press, on_button_release};
 
+/// `LV_EVENT_PRESS_LOST` — fehlt in `oxivgl::enums`, daher wie in
+/// `canboss::views::node` direkt aus den Bindings konstruiert. Kommt, wenn der
+/// Finger (oder ein Touch-Aussetzer) den Button verlaesst: das spaetere
+/// `RELEASED` geht dann an das Objekt unter dem Finger, nicht mehr an den
+/// Button — ohne diese Behandlung bliebe der CAN-Hold-Loop haengen.
+const EVENT_PRESS_LOST: EventCode = EventCode(oxivgl_sys::lv_event_code_t_LV_EVENT_PRESS_LOST);
+
 const SCREEN_BG: u32 = 0xE7DCC8;
 const SURFACE: u32 = 0xFFFDF8;
 const CARD_BG: u32 = 0xFFFDF7;
@@ -188,7 +195,7 @@ impl View for HallView {
                     }
                 }
             }
-            EventCode::RELEASED => {
+            EventCode::RELEASED | EVENT_PRESS_LOST => {
                 if let Some(ui_idx) = btn_idx {
                     if let Some(index) = self.button_indices.get(ui_idx) {
                         if self.pressed_can_button == Some(*index) {

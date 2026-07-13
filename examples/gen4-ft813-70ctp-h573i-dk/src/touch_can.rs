@@ -253,7 +253,47 @@ async fn plc_tx_loop(mut plc: Plc) {
                                     .await;
                             }
                             Either::First(Action::Release) => {
-                                if press_start.elapsed() < Duration::from_millis(MIN_HOLD_BEFORE_RELEASE_MS) {
+                                // Ein Release kurz nach dem Press ist meist ein Touch-Dropout
+                                // (RELEASED + sofort wieder PRESSED). Das Release darf aber
+                                // nicht verworfen werden: bei einem echten kurzen Tap kaeme
+                                // nie ein zweites, und der Hold-Loop wuerde endlos im
+                                // Repeat-Takt weitersenden. Stattdessen bis zum Mindest-Hold
+                                // auf einen Re-Press warten, sonst regulaer ausloesen.
+                                let min_hold_end = press_start + Duration::from_millis(MIN_HOLD_BEFORE_RELEASE_MS);
+                                let mut resumed = None;
+                                while resumed.is_none() {
+                                    let Some(remaining) = min_hold_end.checked_duration_since(Instant::now()) else {
+                                        break;
+                                    };
+                                    match select(ACTIONS.receive(), Timer::after(remaining)).await {
+                                        Either::First(Action::Press(index)) => resumed = Some(index),
+                                        Either::First(Action::CanRx) => {
+                                            send_cycle_output(
+                                                can_scheduler::on_can_rx(&mut plc, &mut scratch, &tx_state),
+                                                false,
+                                            )
+                                            .await;
+                                        }
+                                        Either::First(Action::Release) => {}
+                                        Either::Second(()) => break,
+                                    }
+                                }
+                                if let Some(new_index) = resumed {
+                                    let prev = held;
+                                    held = new_index;
+                                    press_start = Instant::now();
+                                    long_fired = false;
+                                    send_cycle_output(
+                                        can_scheduler::on_touch_switch(
+                                            &mut plc,
+                                            &mut scratch,
+                                            &tx_state,
+                                            prev,
+                                            new_index,
+                                        ),
+                                        false,
+                                    )
+                                    .await;
                                     continue;
                                 }
                                 send_cycle_output(
@@ -358,7 +398,27 @@ async fn legacy_tx_loop() {
                         match select(ACTIONS.receive(), Timer::after(tick)).await {
                             Either::First(Action::CanRx) => {}
                             Either::First(Action::Release) => {
-                                if press_start.elapsed() < Duration::from_millis(MIN_HOLD_BEFORE_RELEASE_MS) {
+                                // Wie im PLC-Loop: fruehes Release nicht verwerfen, sondern
+                                // auf einen Re-Press warten oder regulaer ausloesen.
+                                let min_hold_end = press_start + Duration::from_millis(MIN_HOLD_BEFORE_RELEASE_MS);
+                                let mut resumed = None;
+                                while resumed.is_none() {
+                                    let Some(remaining) = min_hold_end.checked_duration_since(Instant::now()) else {
+                                        break;
+                                    };
+                                    match select(ACTIONS.receive(), Timer::after(remaining)).await {
+                                        Either::First(Action::Press(index)) => resumed = Some(index),
+                                        Either::First(_) => {}
+                                        Either::Second(()) => break,
+                                    }
+                                }
+                                if let Some(new_index) = resumed {
+                                    let prev = held;
+                                    held = new_index;
+                                    can_scheduler::touch_switch(prev, new_index);
+                                    press_start = Instant::now();
+                                    long_fired = false;
+                                    let _ = send_plc_cmd(new_index, false).await;
                                     continue;
                                 }
                                 can_scheduler::touch_end(held, long_fired);
